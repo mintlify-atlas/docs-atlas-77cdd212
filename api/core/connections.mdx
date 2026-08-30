@@ -1,7 +1,7 @@
 ---
-title: "Connection Management: create_connection, import_lego, and Queries"
+title: "Connection Management: create_connection and Queries"
 sidebarTitle: "Connections"
-description: "Reference for bricksim.core connection creation, import/export, transform computation, and connection query functions."
+description: "Reference for bricksim.core connection creation, import/export, transform computation, query functions, and ConnectionInfo data classes."
 ---
 
 Connection functions create, query, and serialize stud-hole connections between brick parts in the active simulation. Each connection is represented as a **rigid weld joint** in PhysX and as a USD prim in the stage, making the assembly graph simultaneously visible to the physics solver and to tooling that reads the USD scene graph.

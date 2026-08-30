@@ -45,7 +45,7 @@ The archive is downloaded from `https://www.cs.cmu.edu/~haoweiw/bricksim_downloa
 
 By default the dataset is stored under the XDG cache directory:
 
-```
+```text
 ~/.cache/bricksim/bricksim_dataset
 ```
 
@@ -56,6 +56,19 @@ export BRICKSIM_DATASET_PATH=/data/bricksim_dataset
 ```
 
 If `XDG_CACHE_HOME` is set, BrickSim respects it and places the dataset under `$XDG_CACHE_HOME/bricksim/bricksim_dataset` instead.
+
+## Downloading the Dataset Manually
+
+`download_bricksim_dataset()` lets you trigger the download independently of the catalog load, for example in a setup or prefetch step. It is a no-op when the dataset is already present on disk:
+
+```python
+import asyncio
+from bricksim.structures import download_bricksim_dataset
+
+asyncio.run(download_bricksim_dataset())
+```
+
+This is the same function called internally by `load_bricksim_dataset()` when `download_if_not_available=True`. Call it explicitly when you want to separate the download step (for example in a CI prefetch job) from the data-loading step.
 
 ## Accessing a Previously Loaded Dataset
 

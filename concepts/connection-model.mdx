@@ -1,5 +1,5 @@
 ---
-title: "Connection Model: Assembly Detection and Breakage"
+title: "Connection Model: Brick Assembly Detection and Breakage"
 sidebarTitle: "Connection Model"
 description: "BrickSim's stud-hole connection model detects assembly and breakage events using configurable physics thresholds for force, alignment, and penetration."
 ---
@@ -85,7 +85,9 @@ Each `AssemblyDebugInfo` object carries the following fields:
 | `grid_pos` | `tuple[float, float]` | Continuous XY position of hole relative to stud, in stud units |
 | `grid_pos_snapped` | `tuple[int, int]` | Nearest integer grid point — the proposed connection offset |
 | `stud_path` | `str` | USD prim path of the stud-side part |
+| `stud_interface` | `int` | Interface ID on the stud part (`1` = stud face) |
 | `hole_path` | `str` | USD prim path of the hole-side part |
+| `hole_interface` | `int` | Interface ID on the hole part (`0` = hole face) |
 
 ---
 
@@ -100,6 +102,7 @@ When utilisation exceeds 1.0 (the preloaded clutch force is overcome), the conne
 | Parameter | Default | Description |
 |---|---|---|
 | `enabled` | `True` | Enable/disable breakage detection |
+| `contact_regularization` | `0.1` | Regularisation weight for contact (normal) forces in the QP |
 | `clutch_axial_compliance` | `1.0` | Regularisation weight for axial (pull-out) stud forces |
 | `clutch_radial_compliance` | `1.0` | Regularisation weight for radial (shear) stud forces |
 | `clutch_tangential_compliance` | `1.0` | Regularisation weight for tangential (twist) stud forces |
@@ -114,6 +117,7 @@ from bricksim.mdp.connection_thresholds import configure_breakage_thresholds
 
 configure_breakage_thresholds(
     enabled=True,
+    contact_regularization=0.1,
     preloaded_force=3.5,
     friction_coefficient=0.2,
     clutch_axial_compliance=1.0,
@@ -159,13 +163,18 @@ Each returned `ConnectionInfo` object describes the event in full:
 | Field | Type | Description |
 |---|---|---|
 | `physics_csid` | `int` | PhysX-internal connection segment ID |
-| `stud_path` | `str` | USD prim path of the stud-side part |
-| `hole_path` | `str` | USD prim path of the hole-side part |
+| `physics_stud_pid` | `int` | PhysX-internal part ID for the stud-side part |
+| `physics_hole_pid` | `int` | PhysX-internal part ID for the hole-side part |
 | `stud_ifid` | `int` | Interface ID on the stud part (`1` = stud face) |
 | `hole_ifid` | `int` | Interface ID on the hole part (`0` = hole face) |
 | `offset` | `tuple[int, int]` | Grid offset `(dx, dy)` of the connection in stud units |
 | `yaw` | `int` | C4 yaw index `0–3` |
 | `env_id` | `int` | Isaac Lab environment index |
+| `usd_stud_pid` | `int` | USD-internal part ID for the stud-side part |
+| `usd_hole_pid` | `int` | USD-internal part ID for the hole-side part |
+| `stud_path` | `str` | USD prim path of the stud-side part |
+| `hole_path` | `str` | USD prim path of the hole-side part |
+| `usd_csid` | `Optional[int]` | USD-internal connection segment ID (if USD sync is enabled) |
 | `conn_path` | `Optional[str]` | USD prim path of the connection (if USD sync is enabled) |
 
 For Isaac Lab training, use the higher-level MDP helpers in `bricksim.mdp.connection_events` instead of polling the raw queues directly. These helpers cache results per environment step and mask events from sub-environments that were reset in the current step:

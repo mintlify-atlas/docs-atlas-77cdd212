@@ -1,7 +1,7 @@
 ---
-title: "Brick Color Lookup and Parsing"
+title: "Brick Color Lookup, Parsing, and Named Color Catalog"
 sidebarTitle: "Colors"
-description: "API reference for bricksim.colors — look up LEGO brick colors by name and parse color inputs into (R, G, B) tuples."
+description: "API reference for bricksim.colors — look up named LEGO brick colors or parse hex strings into (R, G, B) integer tuples for BrickSim brick configurations."
 ---
 
 BrickSim ships a `colors.json` catalog of named LEGO brick colors; the `bricksim.colors` module loads this catalog at import time and exposes it as a sorted dictionary alongside a `parse_color()` helper that resolves both color names and raw hex strings into `(R, G, B)` integer tuples. Color values are used throughout BrickSim wherever a brick's visual appearance is configured — most notably in `BrickPartCfg` and `allocate_brick_part()`, which accept the tuple returned by `parse_color()` as their `color` parameter.
@@ -24,7 +24,7 @@ from bricksim.colors import Colors
 # Inspect the full catalog
 print(f"{len(Colors)} colors available")
 print(list(Colors.keys())[:10])
-# ['Black', 'Blue', 'Bright Green', 'Bright Pink', 'Brown', ...]
+# ['Aqua', 'Black', 'Blue', 'Bright Green', 'Bright Light Blue', 'Bright Light Orange', 'Bright Light Yellow', 'Bright Pink', 'Bright Reddish Orange', 'Brown']
 
 # Access a hex value directly
 print(Colors["Red"])    # 'c91a09'

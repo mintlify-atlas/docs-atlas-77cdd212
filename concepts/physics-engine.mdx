@@ -1,5 +1,5 @@
 ---
-title: "Physics Engine: Isaac Sim PhysX Integration"
+title: "Physics Engine: BrickSim Isaac Sim PhysX Integration"
 sidebarTitle: "Physics Engine"
 description: "How BrickSim runs on NVIDIA PhysX via Isaac Sim, manages brick rigid bodies, joint constraints, and synchronizes with the USD scene graph."
 ---
@@ -20,7 +20,7 @@ Each brick part is spawned as a USD `RigidBody` prim. The geometry is authored f
 
 Mass and inertia are derived analytically. For a `BrickPart(L, W, H)`:
 
-```
+```text
 mass   = brick_mass_in_kg(L, W, H)          # from bricksim.core.mass
 I_xx   = (1/12) * m * (ly² + lz²)
 I_yy   = (1/12) * m * (lx² + lz²)
@@ -104,7 +104,7 @@ from bricksim.core import get_last_step_profiling
 
 profiling = get_last_step_profiling()
 print(profiling)
-# PhysicsStepProfiling(sim_time=1024, step_time=2.341 ms)
+# PhysicsStepProfiling(sim_time=1024, step_time=0.002341)
 ```
 
 | Field | Type | Description |

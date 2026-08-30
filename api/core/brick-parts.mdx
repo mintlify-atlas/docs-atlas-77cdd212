@@ -1,7 +1,7 @@
 ---
 title: "Brick Part Allocation: allocate_brick_part and Friends"
 sidebarTitle: "Brick Parts"
-description: "Reference for bricksim.core brick part allocation and deallocation functions — allocate_brick_part, allocate_unmanaged_brick_part, deallocate_part, and compute_structure_transforms."
+description: "Reference for bricksim.core brick part functions: allocate_brick_part, deallocate_part, arrange_parts_on_table, compute_obstacle_regions, and more."
 ---
 
 The `bricksim.core` module exposes the C++ native extension through a Python binding. All brick part functions create and manage USD prims in the active Isaac Sim stage, bridging NVIDIA PhysX rigid-body simulation with the USD scene graph so that every brick allocated here is immediately visible in both the Isaac Lab environment and the Omniverse viewport.

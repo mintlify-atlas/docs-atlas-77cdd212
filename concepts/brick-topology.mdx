@@ -44,6 +44,12 @@ class JsonPoseHint(TypedDict):
     part: int           # id of the anchor part in this connected component
     pos: list[float]    # [x, y, z] in meters
     rot: list[float]    # [w, x, y, z] quaternion
+
+class JsonTopology(TypedDict):
+    schema: Literal["bricksim/lego_topology@2"]
+    parts: list[JsonPart]
+    connections: list[JsonConnection]
+    pose_hints: list[JsonPoseHint]
 ```
 
 A minimal two-brick tower looks like this:

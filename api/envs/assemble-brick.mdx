@@ -1,7 +1,7 @@
 ---
 title: "AssembleBrickEnvCfg: Isaac Lab RL Environment Configuration"
 sidebarTitle: "AssembleBrickEnvCfg"
-description: "API reference for AssembleBrickEnvCfg, AssembleBrickRGBEnvCfg, and AssembleBrickRGBDEnvCfg — the BrickSim Isaac Lab manager-based RL environment configurations."
+description: "API reference for AssembleBrickEnvCfg, AssembleBrickRGBEnvCfg, and AssembleBrickRGBDEnvCfg — BrickSim configclass objects for the assemble-brick task."
 ---
 
 The `AssembleBrickEnvCfg` family of classes are `@configclass`-decorated configuration objects that fully describe the **assemble-brick** manager-based RL environment. Each class controls the scene layout, observation groups, action and command spaces, reward terms, termination conditions, and simulation parameters. To launch an environment, instantiate one of the concrete variants, customise fields as needed, then pass it to `ManagerBasedRLEnv(cfg=env_cfg)`.
@@ -209,16 +209,20 @@ Configures the `AssembleBrickCommand` term that samples discrete assembly goals 
   Determines which of the two bricks is the moving one. `"hole"` means the robot must pick up and place the hole brick; `"stud"` reverses this.
 </ResponseField>
 
-<ResponseField name="goal_marker_color" type="str | tuple[int, int, int]">
-  Color of the semi-transparent ghost marker rendered at the goal pose during debug visualisation. Accepts named colors (e.g. `"Red"`) or RGB tuples.
+<ResponseField name="goal_marker_visualizer_prim_path" type="str" required>
+  Root USD prim path under which the command creates per-environment goal marker prims (e.g. `"/Visuals/Command/assembly_goal"`). Must be set explicitly; there is no default.
 </ResponseField>
 
-<ResponseField name="debug_vis" type="bool" default="False">
-  When `True`, spawns goal marker prims in the stage and updates their transforms each step.
+<ResponseField name="goal_marker_color" type="str | tuple[int, int, int]" required>
+  Color of the semi-transparent ghost marker rendered at the goal pose during debug visualisation. Accepts named colors (e.g. `"Red"`) or RGB tuples. Must be set explicitly; there is no default.
 </ResponseField>
 
 <ResponseField name="goals" type="torch.Tensor | Sequence[tuple[int, int, int]]" default="()">
   Pre-defined goal candidates as `(offset_x, offset_y, yaw_index)` rows. An empty sequence causes the command to enumerate **all** geometrically valid connections between the two brick types at initialisation time.
+</ResponseField>
+
+<ResponseField name="resampling_time_range" type="tuple[float, float]" default="(0.0, 0.0)">
+  Timer-based resampling interval inherited from `CommandTermCfg`. Unused by `AssembleBrickCommand` — goals are resampled only on environment reset, not on a timer. Keep at the default `(0.0, 0.0)`.
 </ResponseField>
 
 ---

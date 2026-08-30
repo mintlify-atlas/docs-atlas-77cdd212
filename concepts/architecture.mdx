@@ -1,7 +1,7 @@
 ---
 title: "BrickSim Architecture: Native Extension and Python SDK"
 sidebarTitle: "Architecture"
-description: "How the C++ native PhysX extension, the Python bricksim SDK, and the Isaac Sim Omniverse extension layer interact at runtime."
+description: "How the C++ native PhysX extension, the Python bricksim SDK, and the Isaac Sim Omniverse extension layer interact at runtime in BrickSim."
 ---
 
 BrickSim is structured as three cooperating layers: a compiled C++ native extension that owns the physics simulation loop, a Python SDK that exposes a high-level API and Isaac Lab MDP terms, and an Omniverse extension class that registers BrickSim into the Isaac Kit runtime. Understanding how these layers fit together is essential before customising simulation behaviour, adding new brick types, or writing your own reinforcement learning environments.
