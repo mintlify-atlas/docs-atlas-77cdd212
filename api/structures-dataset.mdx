@@ -1,0 +1,218 @@
+---
+title: "BricksimDatasetItem and Structures Dataset API"
+sidebarTitle: "Structures Dataset"
+description: "API reference for bricksim.structures — functions and dataclasses for downloading, loading, and querying the BrickSim LEGO structure catalog."
+---
+
+The `bricksim.structures` module provides async and sync helpers for accessing the BrickSim structures dataset — a catalog of topology JSON files with stability annotations. Each entry in the catalog describes one LEGO structure: its brick count, category, human-readable caption, connectivity analysis with and without a base plate, and a static-stability score. The dataset is downloaded on demand from a hosted archive and cached locally under `~/.cache/bricksim/bricksim_dataset/` by default.
+
+---
+
+## `BricksimDatasetItem`
+
+A dataclass holding metadata for a single entry in the BrickSim structures catalog.
+
+```python
+from bricksim.structures import BricksimDatasetItem
+```
+
+<ResponseField name="model_id" type="str" required>
+  Unique identifier for the structure, used as the dictionary key when the
+  catalog is loaded into memory.
+</ResponseField>
+
+<ResponseField name="category" type="str" required>
+  High-level category label for the structure (e.g. `"animal"`, `"vehicle"`,
+  `"building"`). Categories are defined by the dataset authors and correspond
+  to top-level keys in `dataset.json`.
+</ResponseField>
+
+<ResponseField name="caption" type="str" required>
+  Human-readable description of the structure (e.g. `"A small red car"`).
+  Suitable for display, logging, or text-conditioned retrieval.
+</ResponseField>
+
+<ResponseField name="num_bricks" type="int" required>
+  Total number of brick parts in the structure, not including any injected base
+  plate.
+</ResponseField>
+
+<ResponseField name="json_path" type="Path" required>
+  Absolute path to the topology JSON file on disk. Pass this path to
+  `import_lego()` or open it directly to inspect the parts and connections.
+</ResponseField>
+
+<ResponseField name="all_connected_no_plate" type="bool" required>
+  Whether all bricks in the structure form a single connected component when
+  no base plate is present.
+</ResponseField>
+
+<ResponseField name="all_connected_with_plate" type="bool" required>
+  Whether all bricks form a single connected component when a base plate is
+  included. Structures that are disconnected without a plate often become
+  connected once the plate is added.
+</ResponseField>
+
+<ResponseField name="stable_with_plate" type="bool" required>
+  Whether the structure is statically stable under gravity when placed on a
+  base plate, as determined by BrickSim's stability analysis.
+</ResponseField>
+
+<ResponseField name="max_stability_score_with_plate" type="float" required>
+  Maximum stability score achieved across stability evaluations of this
+  structure with the base plate present. Higher values indicate greater
+  resistance to perturbation.
+</ResponseField>
+
+---
+
+## Module-level constants
+
+```python
+from bricksim.structures import (
+    BRICKSIM_DATASET_URL,
+    BRICKSIM_DATASET_PATH,
+    BRICKSIM_DATASET_CATALOG_PATH,
+)
+```
+
+<ResponseField name="BRICKSIM_DATASET_URL" type="str">
+  The remote URL from which the dataset archive is downloaded:
+  `https://www.cs.cmu.edu/~haoweiw/bricksim_downloads/bricksim_dataset.tar.xz`
+</ResponseField>
+
+<ResponseField name="BRICKSIM_DATASET_PATH" type="Path">
+  Resolved local root directory for the extracted dataset. Defaults to
+  `~/.cache/bricksim/bricksim_dataset/` (or `$XDG_CACHE_HOME/bricksim/bricksim_dataset/`
+  when the XDG variable is set). Can be overridden with the
+  `BRICKSIM_DATASET_PATH` environment variable.
+</ResponseField>
+
+<ResponseField name="BRICKSIM_DATASET_CATALOG_PATH" type="Path">
+  Path to the `dataset.json` catalog file within the extracted archive, at
+  `{BRICKSIM_DATASET_PATH}/data/lego/data/simulator_testset/dataset.json`.
+</ResponseField>
+
+---
+
+## Functions
+
+### `is_bricksim_dataset_available`
+
+```python
+def is_bricksim_dataset_available() -> bool
+```
+
+Returns `True` if the dataset catalog JSON already exists on disk. A `False` result means either the dataset has never been downloaded or the cache directory has been removed.
+
+Use this as a lightweight guard before attempting to load the catalog, or to decide whether to show a download-progress UI.
+
+```python
+from bricksim.structures import is_bricksim_dataset_available
+
+if is_bricksim_dataset_available():
+    print("Dataset is ready.")
+else:
+    print("Dataset not found — will download on next load.")
+```
+
+---
+
+### `download_bricksim_dataset`
+
+```python
+async def download_bricksim_dataset() -> None
+```
+
+Downloads the dataset archive from `BRICKSIM_DATASET_URL` and extracts it to `BRICKSIM_DATASET_PATH`. A `tqdm` progress bar is displayed during the download. If the catalog already exists when this function is called, it returns immediately without re-downloading.
+
+Raises `RuntimeError` if the archive was downloaded and extracted but the catalog file is still absent after extraction, which usually indicates a corrupted or incomplete archive.
+
+<Note>
+  `load_bricksim_dataset()` calls this function automatically when
+  `download_if_not_available=True` (the default), so you typically do not need
+  to call `download_bricksim_dataset()` directly.
+</Note>
+
+---
+
+### `load_bricksim_dataset`
+
+```python
+async def load_bricksim_dataset(
+    download_if_not_available: bool = True,
+) -> dict[str, BricksimDatasetItem]
+```
+
+Loads the dataset catalog and returns all items as a dictionary keyed by `model_id`. On the first call the catalog JSON is read from disk and parsed into `BricksimDatasetItem` instances. Subsequent calls return the same dictionary from a module-level cache without re-reading the file.
+
+<ParamField path="download_if_not_available" type="bool" default="true">
+  When `True` (default), automatically calls `download_bricksim_dataset()` if
+  the catalog is not present locally. Set to `False` to raise a `RuntimeError`
+  instead of downloading, for example in offline environments.
+</ParamField>
+
+**Returns:** `dict[str, BricksimDatasetItem]` — all catalog entries keyed by `model_id`.
+
+**Raises:** `RuntimeError` — if `download_if_not_available=False` and the dataset is not locally available.
+
+<Note>
+  The result is cached in a module-level variable after the first successful
+  load. Calling `load_bricksim_dataset()` multiple times within the same
+  process is free — only the first call performs file I/O or a network request.
+</Note>
+
+---
+
+### `get_bricksim_dataset`
+
+```python
+def get_bricksim_dataset() -> dict[str, BricksimDatasetItem]
+```
+
+Synchronous accessor for the in-memory dataset cache. Returns the same dictionary as `load_bricksim_dataset()` but does not perform any I/O or network access.
+
+**Returns:** `dict[str, BricksimDatasetItem]` — all catalog entries keyed by `model_id`.
+
+**Raises:** `RuntimeError` — if `load_bricksim_dataset()` has not been awaited at least once in this process. The error message will prompt you to call the async loader first.
+
+Use this function in synchronous code that runs after an async initialization phase has already populated the cache (for example, inside a gym `env.reset()` method or a dataclass `__post_init__`).
+
+---
+
+## Environment variable
+
+| Variable | Description |
+|---|---|
+| `BRICKSIM_DATASET_PATH` | Override the default cache location. Set to any writable directory path. Useful when the default `~/.cache` volume has limited space or you want to share the dataset across multiple users. |
+
+---
+
+## Complete async usage example
+
+```python
+import asyncio
+import json
+from bricksim.structures import load_bricksim_dataset
+from bricksim.core import import_lego
+
+async def main():
+    dataset = await load_bricksim_dataset()
+    print(f"{len(dataset)} models available")
+
+    # Find stable multi-brick structures
+    candidates = [
+        item for item in dataset.values()
+        if item.stable_with_plate and item.num_bricks >= 10
+    ]
+    print(f"{len(candidates)} stable structures with 10+ bricks")
+
+    # Load the first one into BrickSim
+    item = candidates[0]
+    with open(item.json_path) as f:
+        topology = json.load(f)
+    part_paths, conn_paths = import_lego(json=topology, env_id=-1)
+    print(f"Imported {len(part_paths)} parts, {len(conn_paths)} connections")
+
+asyncio.run(main())
+```

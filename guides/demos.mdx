@@ -1,0 +1,130 @@
+---
+title: "Running BrickSim Demos"
+sidebarTitle: "Demos"
+description: "Run the bundled BrickSim demos — assembly, in-hand manipulation, keyboard teleoperation, and recorded playback — to explore the simulator interactively."
+---
+
+The `demos/` directory ships four ready-to-run scripts that cover the full breadth of BrickSim's capabilities: autonomous brick assembly with a Franka Panda, dual-arm in-hand manipulation, keyboard-driven robot control, and leader-device teleoperation with trajectory recording and replay. Each script can be launched directly with `uv run bricksim <script>` from the repository root.
+
+<CardGroup cols={2}>
+  <Card title="Assembly Demo" icon="cubes" href="#assembly-demo">
+    Franka Panda autonomously picks and places bricks using RMPflow and BrickSim's physics-based snap detection.
+  </Card>
+  <Card title="In-Hand Manipulation Demo" icon="hand" href="#in-hand-manipulation-demo">
+    Two Franka Panda robots perform a brick handover and complete an in-hand assembly task.
+  </Card>
+  <Card title="Keyboard Teleoperation Demo" icon="keyboard" href="#keyboard-teleoperation-demo">
+    Drive a SO-101 robot joint-by-joint from the terminal — no hardware required.
+  </Card>
+  <Card title="Teleoperation, Recording & Replay Demo" icon="circle-dot" href="#teleoperation-recording--replay-demo">
+    Stream commands from a physical leader device, record demonstrations to disk, and replay them.
+  </Card>
+</CardGroup>
+
+## Prerequisites
+
+The demos are not distributed with the PyPI package; they live only in the repository. Clone the repo and set up the environment before running any demo.
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/intelligent-control-lab/BrickSim BrickSim
+    cd BrickSim
+    ```
+  </Step>
+  <Step title="Download or build the native extension">
+    The fastest path is downloading the prebuilt binary:
+    ```bash
+    ./scripts/download_prebuilt_native.sh
+    ```
+    Alternatively, build from source with `pixi`:
+    ```bash
+    pixi run build-native
+    ```
+  </Step>
+  <Step title="Install Python dependencies">
+    ```bash
+    uv sync --locked
+    ```
+  </Step>
+</Steps>
+
+## Assembly Demo
+
+`demos/demo_assembly.py` demonstrates fully autonomous brick-by-brick assembly. On startup the script reads a structure JSON file, spawns a Franka Panda robot and a workspace, then iterates over each connection in a BFS-sorted assembly plan. For every brick, the robot uses RMPflow to execute a pre-grasp → grasp → lift → pre-assembly → press sequence. The press triggers BrickSim's threshold-based connection detection, which snaps the brick into place once alignment and force conditions are satisfied.
+
+```bash
+uv run bricksim demos/demo_assembly.py
+```
+
+### Key constants
+
+The top of `demo_assembly.py` exposes a small set of constants you can edit without touching the motion-planning logic:
+
+| Constant | Default | Purpose |
+|---|---|---|
+| `STRUCTURE_PATH` | `demos/demo_assembly_structure1.json` | Path to the structure file to assemble |
+| `PRE_PLACED_PARTS` | `[0]` | Part indices already present in the scene at startup |
+| `PLACE_POSE` | `([0.3, 0.0, 0.0], (1,0,0,0))` | Position and orientation of pre-placed parts |
+| `BASEPLATE_KWARGS` | 20×20 Light Gray plate | Baseplate size and color injected into the topology |
+
+### Supported structure formats
+
+The script auto-detects the format of `STRUCTURE_PATH` and converts it to BrickSim's internal topology JSON before loading:
+
+- **Topology JSON** — BrickSim's native format; loaded directly.
+- **Legolization JSON** — converted via `legolization_json_to_topology_json`.
+- **StableText2Brick text** — converted via `bricks_text_to_topology_json`; brick colors are randomized for visual distinction.
+
+## In-Hand Manipulation Demo
+
+`demos/demo_inhand.py` showcases a two-robot collaboration task. Robot 1 picks up a red 4×2×3 brick from the table using a top-down grasp, Robot 2 then grasps the same brick diagonally from below (a diagonal-below grasp), Robot 1 releases its grip completing a mid-air handover, and finally Robot 1 picks up a blue brick and assembles it onto the brick now held by Robot 2 — completing an in-hand assembly.
+
+```bash
+uv run bricksim demos/demo_inhand.py
+```
+
+Both robots are Franka Panda arms positioned on opposite sides of the table, each driven by an independent RMPflow controller. A shared `secondary_controllers` mechanism keeps the holding robot tracking its pose while the assembling robot moves.
+
+## Keyboard Teleoperation Demo
+
+`demos/demo_keyboard_teleop.py` loads a SO-101 robot alongside a small collection of LEGO bricks and lets you drive each joint directly from the terminal. No hardware or extra packages are needed.
+
+```bash
+uv run bricksim demos/demo_keyboard_teleop.py
+```
+
+### Controls
+
+| Key | Action |
+|---|---|
+| `1` – `6` | Select joint 1 – 6 |
+| `↑` or `→` | Increase selected joint position |
+| `↓` or `←` | Decrease selected joint position |
+| `q` | Deactivate joint control |
+
+Each keypress increments or decrements the target joint position by `MAX_JOINT_STEP = 0.01 rad` per physics step.
+
+## Teleoperation, Recording & Replay Demo
+
+`demos/demo_teleop.py` integrates with the [LeRobot](https://github.com/huggingface/lerobot) library to stream joint commands from a physical SO-101 leader device into a simulated SO-101 follower. The same script supports three operating modes selected by editing the `MODE` constant at the top of the file.
+
+```bash
+uv run bricksim demos/demo_teleop.py
+```
+
+<Note>
+  This demo requires the `lerobot` package (`lerobot==0.4.4`) and a configured physical leader device. Install the dev dependencies with `uv sync --locked` (the `lerobot` extra is listed under `[dependency-groups]` in `pyproject.toml`). You must also set the `LEADER_PORT` and `LEADER_ID` constants inside `demos/demo_teleop.py` to match your hardware.
+</Note>
+
+### Modes
+
+Edit the `MODE` variable near the top of `demos/demo_teleop.py` to switch between modes:
+
+| `MODE` | Behaviour |
+|---|---|
+| `"TELEOP"` | Stream commands from the leader device in real time |
+| `"RECORD"` | Same as `TELEOP`, but every leader action is also written as a JSON line to `RECORD_FILEPATH` |
+| `"REPLAY"` | Read previously recorded actions from `RECORD_FILEPATH` and replay them |
+
+For more detail on recording and replay, see the [Teleoperation guide](/guides/teleoperation).

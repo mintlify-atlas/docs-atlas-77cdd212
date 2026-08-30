@@ -1,0 +1,142 @@
+{
+  "projectType": "ai-ml",
+  "projectName": "BrickSim",
+  "projectDescription": "A physics-based simulator for robot manipulation of interlocking LEGO brick assemblies, built on NVIDIA Isaac Sim and Isaac Lab.",
+  "theme": "aspen",
+  "primaryColor": "#E3000B",
+  "lightColor": "#FF4D55",
+  "darkColor": "#9B0008",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Guide",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/brick-topology",
+              "concepts/physics-engine",
+              "concepts/connection-model"
+            ]
+          },
+          {
+            "group": "Demos & Tasks",
+            "pages": [
+              "guides/demos",
+              "guides/assemble-brick-env",
+              "guides/teleoperation",
+              "guides/expert-policy"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "guides/structure-dataset",
+              "guides/stability-analysis",
+              "guides/building-from-source"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core (Native)",
+            "pages": [
+              "api/core/brick-parts",
+              "api/core/connections",
+              "api/core/thresholds"
+            ]
+          },
+          {
+            "group": "Environments",
+            "pages": [
+              "api/envs/assemble-brick",
+              "api/envs/wrappers"
+            ]
+          },
+          {
+            "group": "Topology",
+            "pages": [
+              "api/topology/schema",
+              "api/topology/legolization",
+              "api/topology/ordering"
+            ]
+          },
+          {
+            "group": "Utilities & CLI",
+            "pages": [
+              "api/cli",
+              "api/structures-dataset",
+              "api/colors"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Physics-based simulation of LEGO brick assembly and disassembly on NVIDIA Isaac Sim",
+    "Automatic stud-hole connection detection with configurable force and alignment thresholds",
+    "Physics-based breakage detection with clutch-compliance model",
+    "Isaac Lab RL environment (AssembleBrick) with state, RGB, and RGB-D observation modes",
+    "Topology JSON format for representing multi-brick assemblies and pose hints",
+    "Multi-format structure import: BrickSim topology JSON, legolization JSON, StableText2Brick",
+    "Part arrangement utilities for workspace layout planning",
+    "StableLego static stability analysis via Gurobi MIP solver",
+    "Expert policy rollout CLI with camera capture support",
+    "Bundled BrickSim structures dataset with 1,000+ LEGO models"
+  ],
+  "publicApiSurface": [
+    "bricksim.core.allocate_brick_part()",
+    "bricksim.core.allocate_unmanaged_brick_part()",
+    "bricksim.core.deallocate_part()",
+    "bricksim.core.create_connection()",
+    "bricksim.core.deallocate_connection()",
+    "bricksim.core.deallocate_all_managed()",
+    "bricksim.core.import_lego()",
+    "bricksim.core.export_lego()",
+    "bricksim.core.compute_connection_transform()",
+    "bricksim.core.compute_connection_local_transform()",
+    "bricksim.core.compute_graph_transform()",
+    "bricksim.core.compute_connected_component()",
+    "bricksim.core.are_parts_connected()",
+    "bricksim.core.arrange_parts_in_workspace()",
+    "bricksim.core.arrange_parts_on_table()",
+    "bricksim.core.compute_structure_transforms()",
+    "bricksim.core.get_assembled_connections()",
+    "bricksim.core.get_disassembled_connections()",
+    "bricksim.core.AssemblyThresholds",
+    "bricksim.core.BreakageThresholds",
+    "bricksim.core.ConnectionInfo",
+    "bricksim.mdp.connection_thresholds.configure_assembly_thresholds()",
+    "bricksim.mdp.connection_thresholds.configure_breakage_thresholds()",
+    "bricksim.envs.assemble_brick.env.AssembleBrickEnvCfg",
+    "bricksim.envs.assemble_brick.env.AssembleBrickRGBEnvCfg",
+    "bricksim.envs.assemble_brick.env.AssembleBrickRGBDEnvCfg",
+    "bricksim.envs.wrappers.ToDeviceWrapper",
+    "bricksim.topology.schema.JsonTopology",
+    "bricksim.topology.legolization.legolization_json_to_topology_json()",
+    "bricksim.topology.legolization.is_legolization_json()",
+    "bricksim.topology.stabletext2brick.bricks_text_to_topology_json()",
+    "bricksim.topology.ordering.bfs_sort_connections()",
+    "bricksim.structures.load_bricksim_dataset()",
+    "bricksim.structures.get_bricksim_dataset()",
+    "bricksim.structures.download_bricksim_dataset()",
+    "bricksim.stable_lego.run_stable_lego()",
+    "CLI: bricksim",
+    "CLI: bricksim-assemble-brick-expert",
+    "CLI: bricksim-convert-topology",
+    "CLI: bricksim-type-configs"
+  ]
+}

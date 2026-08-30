@@ -1,0 +1,129 @@
+---
+title: "Teleoperation, Recording, and Replay in BrickSim"
+sidebarTitle: "Teleoperation"
+description: "Use a physical leader device with the lerobot package to teleoperate a robot in BrickSim, record demonstration trajectories, and replay them."
+---
+
+BrickSim's teleoperation demo uses the [LeRobot](https://github.com/huggingface/lerobot) library to stream joint commands from a physical SO-101 leader arm into a simulated SO-101 follower. Each leader joint position is read every physics update, converted from degrees to radians, and sent to the simulator as a target joint position. The same `demo_teleop.py` script also handles trajectory recording to disk and deterministic replay — making it a one-stop tool for collecting human demonstrations.
+
+<Note>
+  Teleoperation and recording require the `lerobot` package and a physical SO-101 leader device connected to your machine over USB serial. Replay mode works without any hardware.
+</Note>
+
+## Prerequisites
+
+<Steps>
+  <Step title="Install BrickSim from source">
+    The demo lives in the repository, not in the PyPI package. Clone and install as described in the [Quickstart](/guides/demos#prerequisites).
+  </Step>
+  <Step title="Install the lerobot dev dependency">
+    The `lerobot==0.4.4` package is listed under `[dependency-groups]` in `pyproject.toml`. Running `uv sync --locked` already installs it.
+
+    ```bash
+    uv sync --locked
+    ```
+  </Step>
+  <Step title="Connect your leader device">
+    Plug the SO-101 leader arm in over USB. Identify its serial port (e.g., `/dev/serial/by-id/usb-…`).
+  </Step>
+</Steps>
+
+## Configuring the Demo
+
+All run-time parameters for `demo_teleop.py` are set via constants at the top of the file. Open the script in your editor and adjust as needed:
+
+```python
+# demos/demo_teleop.py
+
+LEADER_PORT = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5AAF288330-if00"  # <-- your port
+LEADER_ID   = "my_lerobot_leader"   # <-- your calibration ID
+
+MODE             = "TELEOP"  # "TELEOP" | "RECORD" | "REPLAY"
+RECORD_FILEPATH  = "demos/demo_teleop_record.jsonl"  # path for RECORD / REPLAY
+SAVE_VIDEO       = True      # capture viewport screenshots each step
+MAX_JOINT_STEP   = 0.1       # maximum joint delta per physics step (rad)
+```
+
+<Warning>
+  You **must** update `LEADER_PORT` and `LEADER_ID` to match your hardware before running in `TELEOP` or `RECORD` mode. The default values are the developer's own port and will not work on your machine.
+</Warning>
+
+### Scene contents
+
+On startup the script spawns:
+- A kinematic 20×20 Light Gray baseplate at `(0.10, 0.10, 0.0)`.
+- A 2×4×3 Blue brick at `(0.05, 0.22, 0.0)`.
+- A 2×6×3 Pink brick at `(0.10, 0.22, 0.0)`.
+
+## Running Teleoperation
+
+```bash
+uv run bricksim demos/demo_teleop.py
+```
+
+With `MODE = "TELEOP"`, the script:
+
+1. Connects to the leader device via `lerobot.teleoperators.so_leader.SOLeader`.
+2. Reads the leader's current joint positions each physics step via `leader.get_action()`.
+3. Converts values from degrees to radians and applies a −15° offset to the last (gripper) joint.
+4. Clamps the per-step joint delta to `±MAX_JOINT_STEP` to prevent sudden jumps.
+5. Sends the resulting target position array to the simulated follower as an `ArticulationAction`.
+
+If the leader disconnects mid-run, the demo prints a warning, stops updating the follower, and attempts to reconnect on the next physics step.
+
+## Recording Demonstrations
+
+Set `MODE = "RECORD"` in `demo_teleop.py`, then run:
+
+```bash
+uv run bricksim demos/demo_teleop.py
+```
+
+In record mode the script behaves identically to `TELEOP` but additionally writes every leader action to `RECORD_FILEPATH` as a newline-delimited JSON file (`.jsonl`). Each line is a JSON array of joint positions in radians, one entry per degree of freedom:
+
+```json
+[0.123, -0.456, 0.789, -1.234, 0.567, 0.890]
+[0.124, -0.455, 0.790, -1.233, 0.568, 0.891]
+...
+```
+
+The file is flushed after every step so that partial recordings are not lost if the session is interrupted.
+
+If `SAVE_VIDEO = True` (the default), the script also captures the active Isaac Sim viewport to numbered PNG frames in `demos/screenshots/`. You can assemble these into a video with `ffmpeg`:
+
+```bash
+ffmpeg -r 60 -i demos/screenshots/%06d.png -c:v libx264 -pix_fmt yuv420p teleop.mp4
+```
+
+## Replaying Demonstrations
+
+Set `MODE = "REPLAY"` in `demo_teleop.py`, then run:
+
+```bash
+uv run bricksim demos/demo_teleop.py
+```
+
+In replay mode no leader device is needed. The script reads joint positions line-by-line from `RECORD_FILEPATH`, applies the same `±MAX_JOINT_STEP` clamping, and sends them to the follower in order. When the file is exhausted the script prints `"Replay completed."` and exits the loop.
+
+The replay reader validates that each JSON array has the correct number of degrees of freedom and raises a clear error with the offending line number if the file is malformed.
+
+## Keyboard Teleoperation
+
+For a simpler alternative that requires no hardware, use `demo_keyboard_teleop.py`:
+
+```bash
+uv run bricksim demos/demo_keyboard_teleop.py
+```
+
+This demo loads the same SO-101 robot alongside a small collection of LEGO bricks and lets you move one joint at a time from the terminal. Press keys `1` through `6` to select a joint, then use the arrow keys to increment or decrement its position by `0.01 rad` per physics step. Press `q` to deactivate joint control.
+
+| Key | Action |
+|---|---|
+| `1` – `6` | Select joint |
+| `↑` / `→` | Increase joint position |
+| `↓` / `←` | Decrease joint position |
+| `q` | Deactivate control |
+
+<Tip>
+  Keyboard teleoperation is a good first step when you want to verify the simulation scene looks correct before committing to a hardware-in-the-loop setup.
+</Tip>

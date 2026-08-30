@@ -1,0 +1,206 @@
+---
+title: "JsonTopology Schema: Typed Topology Document Format"
+sidebarTitle: "JsonTopology"
+description: "API reference for the bricksim.topology.schema module — TypedDict definitions for the bricksim/lego_topology@2 JSON document format."
+---
+
+`bricksim.topology.schema` defines the Python-typed view of BrickSim's topology JSON format. These `TypedDict` classes mirror the C++ structs in `native/modules/bricksim/io/topology.cppm` and are used throughout BrickSim wherever topology documents are loaded from disk, generated programmatically, or passed between Python and the native simulation layer. All field names, array orderings, and unit conventions must match exactly for the native importer to accept the document.
+
+---
+
+## Schema identifier
+
+```python
+from bricksim.topology.schema import SCHEMA_STRING, TopologySchema
+
+SCHEMA_STRING: Final[TopologySchema] = "bricksim/lego_topology@2"
+```
+
+`TopologySchema` is a `Literal` type alias for `"bricksim/lego_topology@2"`. `SCHEMA_STRING` is the constant that must appear verbatim in every topology document's `"schema"` field. Documents with a different schema string will be rejected by the native importer.
+
+---
+
+## Type aliases
+
+The following type aliases are used as field annotations throughout the schema:
+
+| Alias | Underlying type | Semantics |
+|---|---|---|
+| `JsonBrickColor` | `list[int]` | `[r, g, b]` in the range `[0, 255]` |
+| `JsonConnectionOffset` | `list[int]` | `[x, y]` offset in stud-grid units |
+| `JsonPosition` | `list[float]` | `[x, y, z]` world position in metres |
+| `JsonWxyzQuaternion` | `list[float]` | `[w, x, y, z]` unit quaternion |
+
+---
+
+## TypedDicts
+
+### `JsonBrickPayload`
+
+Describes the geometric and visual properties of a single brick part. Serialised by the C++ `BrickSerializer`.
+
+<ResponseField name="L" type="int">
+  Brick length along the X axis in stud units.
+</ResponseField>
+
+<ResponseField name="W" type="int">
+  Brick width along the Y axis in stud units.
+</ResponseField>
+
+<ResponseField name="H" type="int">
+  Brick height in plate units. One standard LEGO brick is 3 plate units tall (`H = 3`); a flat baseplate tile is `H = 1`.
+</ResponseField>
+
+<ResponseField name="color" type="list[int]">
+  RGB colour as `[r, g, b]`, each in the range `[0, 255]`. Maps to the brick's USD display colour.
+</ResponseField>
+
+---
+
+### `JsonPart`
+
+Represents a single assembly part. Currently only the `"brick"` type is defined, but the `type` discriminant field is reserved for future part varieties.
+
+<ResponseField name="id" type="int">
+  Zero-based integer identifier for this part. Must be unique within the `parts` array. Referenced by `stud_id` and `hole_id` in connections and by `part` in pose hints.
+</ResponseField>
+
+<ResponseField name="type" type='Literal["brick"]'>
+  Part type discriminant. Always `"brick"` for LEGO brick parts.
+</ResponseField>
+
+<ResponseField name="payload" type="JsonBrickPayload">
+  Geometric and colour data for the brick. See [`JsonBrickPayload`](#jsonbrickpayload) above.
+</ResponseField>
+
+---
+
+### `JsonConnection`
+
+Represents a single stud-hole connection between two parts. Connections are directional in the sense that one part provides studs and the other provides holes, but the graph edge is undirected for physics purposes.
+
+<ResponseField name="id" type="int">
+  Zero-based integer identifier for this connection. Must be unique within the `connections` array.
+</ResponseField>
+
+<ResponseField name="stud_id" type="int">
+  `id` of the part whose stud interface participates in this connection.
+</ResponseField>
+
+<ResponseField name="stud_iface" type="int">
+  Interface index on the stud brick. `1` is the top face of a standard brick; `0` is the bottom.
+</ResponseField>
+
+<ResponseField name="hole_id" type="int">
+  `id` of the part whose hole interface participates in this connection.
+</ResponseField>
+
+<ResponseField name="hole_iface" type="int">
+  Interface index on the hole brick. `0` is the bottom (hole) face of a standard brick.
+</ResponseField>
+
+<ResponseField name="offset" type="list[int]">
+  `[x, y]` grid offset in stud units from the stud brick's interface origin to the hole brick's interface origin. Encodes the relative placement of the two bricks on the stud grid.
+</ResponseField>
+
+<ResponseField name="yaw" type="int">
+  C4 yaw rotation of the hole brick relative to the stud brick. `0` = 0°, `1` = 90°, `2` = 180°, `3` = 270°.
+</ResponseField>
+
+---
+
+### `JsonPoseHint`
+
+Provides a world-space anchor pose for one connected component. The native importer uses pose hints to place the component's root part in the world before deriving all other part poses from the connection graph. Exactly one pose hint should be provided per connected component.
+
+<ResponseField name="part" type="int">
+  `id` of the part whose pose is specified. Should be the root (typically lowest-layer) part of its connected component.
+</ResponseField>
+
+<ResponseField name="pos" type="list[float]">
+  World position `[x, y, z]` of the part's origin in metres. The origin is the bottom-centre of the brick's footprint.
+</ResponseField>
+
+<ResponseField name="rot" type="list[float]">
+  World orientation as a `[w, x, y, z]` unit quaternion.
+</ResponseField>
+
+---
+
+### `JsonTopology`
+
+Top-level topology document. A valid topology must have `schema == SCHEMA_STRING` and at least one entry in `parts`.
+
+<ResponseField name="schema" type="TopologySchema">
+  Schema identifier string. Must equal `"bricksim/lego_topology@2"`.
+</ResponseField>
+
+<ResponseField name="parts" type="list[JsonPart]">
+  Ordered list of all parts in the assembly. Part `id` values should match their list indices, though the native importer resolves parts by `id` rather than position.
+</ResponseField>
+
+<ResponseField name="connections" type="list[JsonConnection]">
+  List of stud-hole connections. An empty list is valid and represents an assembly of disconnected parts.
+</ResponseField>
+
+<ResponseField name="pose_hints" type="list[JsonPoseHint]">
+  List of world-space anchor poses, one per connected component. If omitted or empty, the native importer may fall back to a default placement strategy.
+</ResponseField>
+
+---
+
+## Minimal valid topology example
+
+The following JSON document represents two 2×4 bricks stacked on top of each other, with the lower brick anchored at the world origin:
+
+```json
+{
+  "schema": "bricksim/lego_topology@2",
+  "parts": [
+    {
+      "id": 0,
+      "type": "brick",
+      "payload": {"L": 4, "W": 2, "H": 3, "color": [255, 0, 0]}
+    },
+    {
+      "id": 1,
+      "type": "brick",
+      "payload": {"L": 4, "W": 2, "H": 3, "color": [0, 0, 255]}
+    }
+  ],
+  "connections": [
+    {
+      "id": 0,
+      "stud_id": 0,
+      "stud_iface": 1,
+      "hole_id": 1,
+      "hole_iface": 0,
+      "offset": [0, 0],
+      "yaw": 0
+    }
+  ],
+  "pose_hints": [
+    {
+      "part": 0,
+      "pos": [0.3, 0.0, 0.0],
+      "rot": [1.0, 0.0, 0.0, 0.0]
+    }
+  ]
+}
+```
+
+```python
+import json
+from bricksim.topology.schema import JsonTopology, SCHEMA_STRING
+
+with open("structure.json") as f:
+    topology: JsonTopology = json.load(f)
+
+assert topology["schema"] == SCHEMA_STRING
+print(f"Loaded {len(topology['parts'])} parts, "
+      f"{len(topology['connections'])} connections")
+```
+
+<Note>
+  `JsonTopology` and its nested types are plain `TypedDict` subclasses. They carry no runtime validation logic — use them for static type checking (e.g. with `mypy` or `pyright`) and as documentation of the expected JSON shape. The native importer performs structural validation when loading.
+</Note>

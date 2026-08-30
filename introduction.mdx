@@ -1,0 +1,93 @@
+---
+title: "BrickSim: Physics-Based LEGO Assembly Simulator"
+sidebarTitle: "Introduction"
+description: "BrickSim is a physics-based simulator for robotic manipulation of interlocking LEGO brick assemblies on NVIDIA Isaac Sim. Learn what it offers and who it is for."
+---
+
+BrickSim is a physics-based simulation environment designed for robotic manipulation of interlocking LEGO brick assemblies. Built on top of NVIDIA Isaac Sim 5.1 and Isaac Lab, it gives robotics researchers and reinforcement learning practitioners a fully physics-driven platform for studying pick-and-place, assembly sequencing, and structural manipulation at the brick level. Rather than treating assembled structures as rigid monoliths, BrickSim models every stud-hole connection individually — detecting new connections as they form under applied force and breaking existing ones when contact loads exceed configurable thresholds — making it possible to study the full mechanical lifecycle of a LEGO assembly inside a controlled simulation loop.
+
+<Note>
+  BrickSim is a research simulator. The accompanying paper, which describes the
+  design, physics model, and benchmark results in detail, is available on arXiv:
+  [arXiv:2603.16853](https://arxiv.org/abs/2603.16853).
+</Note>
+
+## Key Capabilities
+
+<CardGroup cols={2}>
+  <Card title="Automatic Assembly Detection" icon="magnet">
+    BrickSim monitors every stud-hole pair in the scene each physics step. When
+    a brick is pressed onto another with sufficient force and alignment, the
+    connection is detected and a rigid joint is created automatically — no
+    scripted snapping required.
+  </Card>
+  <Card title="Physics-Based Breakage Modeling" icon="circle-exclamation">
+    Connections break when contact forces exceed per-connection thresholds
+    governed by a configurable `BreakageThresholds` model. Parameters such as
+    clutch axial/radial compliance, friction coefficient, and preloaded force
+    let you tune the mechanical fidelity of every joint.
+  </Card>
+  <Card title="Isaac Lab RL Environment" icon="robot">
+    BrickSim ships a fully registered Isaac Lab reinforcement learning
+    environment. Observation spaces, action spaces, and reward functions are
+    built around the assembly task, so you can start training agents without
+    writing boilerplate environment code.
+  </Card>
+  <Card title="Topology Serialization" icon="code-branch">
+    Brick structures are described as JSON topology graphs. The `import_lego`
+    and `export_lego` API functions convert between live USD stages and the
+    topology format, and the `bricksim-convert-topology` CLI tool transforms
+    external formats into the BrickSim schema.
+  </Card>
+  <Card title="Multiple Structure Import Formats" icon="file-import">
+    Structures can be loaded from the BrickSim JSON topology format or
+    constructed procedurally through the Python API. The `resources/` directory
+    contains pre-made USD files and assets ready to drop into any scene.
+  </Card>
+  <Card title="Stability Analysis" icon="chart-line">
+    When the optional `stablelego` extra is installed, BrickSim integrates with
+    the Gurobi optimisation solver via `gurobipy` to run static stability
+    analysis on brick assemblies — useful for evaluating structural integrity
+    before or after a manipulation sequence.
+  </Card>
+</CardGroup>
+
+## System Requirements
+
+BrickSim targets high-performance simulation workloads and has the following minimum requirements:
+
+| Requirement | Specification |
+|---|---|
+| **Architecture** | x86-64 (64-bit Intel or AMD) |
+| **Operating System** | Ubuntu 22.04+ or any Linux distribution with `GLIBC >= 2.35`, `GLIBCXX >= 3.4.30`, and `CXXABI >= 1.3.13` |
+| **GPU Driver** | NVIDIA driver compatible with [Isaac Sim 5.1 requirements](https://docs.isaacsim.omniverse.nvidia.com/5.1.0/installation/requirements.html#system-requirements) |
+| **Python** | 3.11 (exactly) |
+| **Package Manager** | [`uv`](https://docs.astral.sh/uv/getting-started/installation/) |
+
+<Warning>
+  Only x86-64 Linux is currently supported. macOS and Windows builds are not
+  yet available.
+</Warning>
+
+## Repository Layout
+
+If you are working from the source repository, the following top-level directories are relevant:
+
+| Path | Purpose |
+|---|---|
+| `native/` | C++ native extension (stud-hole physics, connection management) |
+| `python/` | Python extension and public API (`bricksim` package) |
+| `demos/` | Ready-to-run demo scripts for assembly, teleoperation, and in-hand manipulation |
+| `experiments/` | Research and evaluation scripts used in the paper |
+| `resources/` | USD files and other scene assets |
+| `scripts/` | Development and build scripts (native download, compilation helpers) |
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="bolt" href="/quickstart">
+    Install BrickSim and run your first assembly demo in under five minutes.
+  </Card>
+  <Card title="Installation" icon="wrench" href="/installation">
+    Detailed instructions for installing from the package registry or building
+    the C++ native extension from source.
+  </Card>
+</CardGroup>

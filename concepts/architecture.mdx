@@ -1,0 +1,144 @@
+---
+title: "BrickSim Architecture: Native Extension and Python SDK"
+sidebarTitle: "Architecture"
+description: "How the C++ native PhysX extension, the Python bricksim SDK, and the Isaac Sim Omniverse extension layer interact at runtime."
+---
+
+BrickSim is structured as three cooperating layers: a compiled C++ native extension that owns the physics simulation loop, a Python SDK that exposes a high-level API and Isaac Lab MDP terms, and an Omniverse extension class that registers BrickSim into the Isaac Kit runtime. Understanding how these layers fit together is essential before customising simulation behaviour, adding new brick types, or writing your own reinforcement learning environments.
+
+## Layer Overview
+
+<CardGroup cols={3}>
+  <Card title="C++ Native Extension" icon="c">
+    Lives in `native/`. Compiled against Isaac Sim's PhysX runtime. Implements the physics assembly and breakage detection loop, USD prim allocation, and JSON topology import/export. Exposed to Python via pybind11-style bindings in `bricksim.core`.
+  </Card>
+  <Card title="Python SDK" icon="python">
+    Lives in `python/bricksim/`. Provides typed stubs (`core.pyi`), topology conversion helpers, MDP term functions, color parsing utilities, and dataset loading. Depends on the native `core` module being loadable at import time.
+  </Card>
+  <Card title="Isaac Sim Extension" icon="cube">
+    Lives in `python/bricksim/_exts/bricksim/`. The `BrickSimExtension` class extends `omni.ext.IExt` and is registered with Omniverse Kit. It installs UI panels (connection overlay, frame-time HUD, structures browser) and patches Isaac Sim's toolbar at startup.
+  </Card>
+</CardGroup>
+
+### C++ Native Extension
+
+The `native/` directory contains all C++ source code that is compiled as a Kit native plugin. The principal modules are:
+
+- **`bricksim.api`** — the single export surface bridging C++ internals to Python. All Python-visible functions (`allocate_brick_part`, `create_connection`, `get_assembled_connections`, etc.) are defined here.
+- **`bricksim.physx.assembly`** — `AssemblyChecker` evaluates stud–hole proximity, tilt, force, yaw, and position error each physics step. If all thresholds are satisfied it returns a `ConnectionSegment` which is then materialised as a weld joint.
+- **`bricksim.physx.breakage`** — `BreakageChecker` solves a quadratic program each step to estimate clutch utilisation. When utilisation exceeds the preloaded force threshold the connection is scheduled for removal.
+- **`bricksim.omni.lego_runtime`** — the `LegoRuntime` singleton that holds the live `World` (USD graph + physics graph + USD–PhysX bridge).
+- **`bricksim.io.topology`** — JSON serialisation/deserialisation of `JsonTopology` documents.
+
+### Python SDK
+
+The `python/bricksim/` package is structured as follows:
+
+| Sub-package | Purpose |
+|---|---|
+| `bricksim.core` | Native extension bindings (auto-generated stubs in `core.pyi`) |
+| `bricksim.topology` | `JsonTopology` schema, legolization importer, StableText2Brick converter, voxel grid |
+| `bricksim.mdp` | MDP term functions: connection events, connection state queries, threshold configurators, brick part resolution |
+| `bricksim.envs` | Isaac Lab environment configurations including `AssembleBrickBaseEnvCfg` |
+| `bricksim.assets` | USD paths for the FR3 robot, RealSense D435 sensor, and stage presets |
+| `bricksim.colors` | Named colour lookup (e.g. `"Dark Gray"` → `[72, 77, 72]`) |
+| `bricksim.ui` | Omniverse UI controllers (connection overlay, toolbar patches, structures browser) |
+
+### Isaac Sim Extension
+
+`BrickSimExtension` inherits from `omni.ext.IExt` and is registered through the extension manifest at `_exts/bricksim/config/extension.toml`. On startup it calls `_init_ui()`, which:
+
+1. Calls `install_toolbar_patches()` to add a **Connected Component** selection mode to Isaac Sim's toolbar.
+2. Calls `install_step_one_frame_patch()` to expose a single-step affordance in the UI.
+3. Instantiates `AssemblySelectionSync`, `ConnectionOverlayController`, `FrameTimeHudController`, `LegoUI`, and `LegoStructuresBrowser`.
+
+When running headlessly (without `omni.kit.window.property`), the UI block is skipped silently.
+
+---
+
+## Startup Sequence
+
+When `import bricksim` is executed the following steps happen in order:
+
+<Steps>
+  <Step title="carb detection">
+    The package-level `__init__.py` attempts `import carb`. If `carb` is absent the package warns that some features may not work and skips the rest of the sequence — useful for offline topology manipulation without a running Isaac Sim.
+  </Step>
+  <Step title="Native core loaded">
+    `from . import core` is executed, loading the compiled native plugin into the process. The `LegoRuntime` singleton is initialised and the USD stage listener is registered.
+  </Step>
+  <Step title="Environments registered">
+    `from . import envs` triggers the import of all environment configuration classes, which registers them with Isaac Lab's environment registry.
+  </Step>
+  <Step title="Extension class imported">
+    `from .extension import BrickSimExtension` makes the Omniverse extension class available.
+  </Step>
+  <Step title="Extension enabled">
+    `_ensure_bricksim_extension_enabled()` resolves the `_exts/bricksim` folder path and calls:
+    ```python
+    ext_manager.set_extension_enabled_immediate("bricksim", True)
+    ```
+    This triggers `BrickSimExtension.on_startup()`, which installs the UI panels described above.
+  </Step>
+</Steps>
+
+---
+
+## Isaac Lab Integration
+
+BrickSim ships a full set of Isaac Lab MDP terms that plug directly into the `ManagerBasedRLEnvCfg` framework. The terms are distributed across two locations:
+
+- **`bricksim.mdp`** — generic, task-agnostic terms for connection events, connection state queries, threshold configuration, and brick part resolution.
+- **`bricksim.envs.assemble_brick.mdp`** — task-specific terms for the single-brick assembly scenario: observations (`obs_moving_brick_pose`, `obs_command_target_pose`), rewards (`reward_reach_brick`, `reward_success_bonus`), and terminations (`target_connection_formed_and_gripper_open`, `non_target_connection_formed`).
+
+The `AssembleBrickBaseEnvCfg` class subclasses `ManagerBasedRLEnvCfg` and wires everything together:
+
+```python
+@configclass
+class AssembleBrickBaseEnvCfg(ManagerBasedRLEnvCfg):
+    scene: SceneCfg = SceneCfg(num_envs=1, env_spacing=5.0)
+    observations: ObservationsCfg = ObservationsCfg()
+    actions: ActionsCfg = ActionsCfg()
+    commands: CommandsCfg = CommandsCfg()
+    rewards: RewardsCfg = RewardsCfg()
+    terminations: TerminationsCfg = TerminationsCfg()
+    events: EventCfg = EventCfg()
+```
+
+`__post_init__` configures the simulation parameters (`dt=1/60`, `decimation=6`, `use_fabric=False`, `device="cpu"`) and calls `configure_assembly_thresholds(enabled=True)` and `configure_breakage_thresholds(enabled=False)` to set process-global detection defaults.
+
+---
+
+## USD Scene Representation
+
+Every brick part is a USD `RigidBody` prim managed by BrickSim's allocator. Parts belonging to a particular parallel environment are placed under a per-environment scope such as `/World/Env_0/Brick`. Connections are represented as additional USD prims created alongside the part prims.
+
+The allocator tracks which prims are *managed* (created by `allocate_brick_part()` or `import_lego()`) vs *unmanaged* (created by the caller via `allocate_unmanaged_brick_part()`). Only managed prims are destroyed by `deallocate_all_managed(env_id)` during episode resets.
+
+USD–PhysX synchronisation is controlled at runtime:
+
+```python
+from bricksim.core import set_sync_to_usd, get_sync_to_usd
+
+# Mirror PhysX rigid body transforms back to USD every physics step
+set_sync_to_usd(True)
+
+# Disable mirroring for headless training (saves CPU time)
+set_sync_to_usd(False)
+
+print(get_sync_to_usd())  # -> False
+```
+
+When sync is disabled, USD prim transforms diverge from the PhysX simulation state. Re-enable sync before rendering or exporting a topology snapshot.
+
+<Note>
+  After making changes to any file under `native/`, you must recompile the native extension for your edits to take effect. Run:
+  ```bash
+  pixi run build-native
+  ```
+  To also run the C++ test suite after the build:
+  ```bash
+  pixi run test-native-debug    # debug build
+  pixi run test-native-release  # optimised build
+  ```
+</Note>

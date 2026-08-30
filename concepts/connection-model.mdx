@@ -1,0 +1,210 @@
+---
+title: "Connection Model: Assembly Detection and Breakage"
+sidebarTitle: "Connection Model"
+description: "BrickSim's stud-hole connection model detects assembly and breakage events using configurable physics thresholds for force, alignment, and penetration."
+---
+
+The connection model is the core novelty of BrickSim. Standard rigid-body simulators treat every object as permanently independent or permanently fused. BrickSim bridges those extremes by continuously monitoring stud–hole pairs during simulation and firing discrete connection events when physical conditions are right. This allows a robot policy to experience the tactile sensation of snapping a brick into place — and the resistance of pulling one apart — as natural consequences of its applied forces rather than scripted triggers.
+
+## Assembly Detection
+
+Every physics step, the native `AssemblyChecker` evaluates all candidate stud–hole pairs where a robot end-effector is currently applying force. For each candidate pair it computes six scalar metrics from the current PhysX state and compares them against configurable thresholds. Only when **all six conditions are satisfied simultaneously** does BrickSim create a weld joint and enqueue a `ConnectionInfo` assembly event.
+
+The six conditions evaluated by the `AssemblyChecker` are:
+
+1. **Distance** — the signed separation between stud tip and hole face along the shared Z axis is within `[-max_penetration, distance_tolerance]`.
+2. **Tilt** — the angular deviation between the stud Z axis and the hole Z axis (in radians) is ≤ `z_angle_tolerance`.
+3. **Force** — the compressive force projected onto the stud Z axis is ≥ `required_force` (i.e. the robot is pushing in).
+4. **Yaw alignment** — after snapping to the nearest C4 rotation, the residual yaw error is ≤ `yaw_tolerance`.
+5. **Position error** — the distance between the continuous XY grid position and the nearest integer grid point is ≤ `position_tolerance`.
+6. **Overlap** — the stud and hole grids share at least one stud cell after applying the snapped offset and yaw.
+
+### Assembly Threshold Parameters
+
+| Parameter | Default | Description |
+|---|---|---|
+| `enabled` | `True` | Enable/disable detection entirely |
+| `distance_tolerance` | `0.001 m` | Max stud/hole separation along Z |
+| `max_penetration` | `0.005 m` | Max tolerated penetration (sim inaccuracy budget) |
+| `z_angle_tolerance` | `5° (rad)` | Max tilt mismatch between stud and hole Z axes |
+| `required_force` | `1.0 N` | Min compressive force along stud Z axis |
+| `yaw_tolerance` | `5° (rad)` | Max residual yaw error after C4 snap |
+| `position_tolerance` | `0.002 m` | Max planar position error after grid snap |
+
+Configure thresholds at startup (or any time before the physics loop runs) using the helper in `bricksim.mdp.connection_thresholds`:
+
+```python
+from bricksim.mdp.connection_thresholds import configure_assembly_thresholds
+import math
+
+configure_assembly_thresholds(
+    enabled=True,
+    distance_tolerance=0.001,       # 1 mm
+    max_penetration=0.005,          # 5 mm
+    z_angle_tolerance=5.0 / 180.0 * math.pi,  # 5°
+    required_force=1.0,             # 1 N
+    yaw_tolerance=5.0 / 180.0 * math.pi,      # 5°
+    position_tolerance=0.002,       # 2 mm
+)
+```
+
+These thresholds are process-global, not per-environment. If you need per-environment sensitivity, gate assembly detection with policy-level logic rather than changing thresholds mid-episode.
+
+<Tip>
+  Loosening `required_force` to `0.5 N` can help during early training when the policy has not yet learned to apply sufficient downward pressure. Tighten it back to `1.0 N` once the policy reliably grasps and transports the brick.
+</Tip>
+
+---
+
+## Assembly Debug Info
+
+Between assembly events, `get_assembly_debug_infos()` gives you per-candidate scalar values from the most recent physics step. This is invaluable for tuning thresholds without trial-and-error:
+
+```python
+from bricksim.core import get_assembly_debug_infos
+
+for info in get_assembly_debug_infos():
+    print(info)
+    # AssemblyDebugInfo(accepted=False, relative_distance=0.0023, tilt=0.031,
+    #   projected_force=-0.8, yaw_error=0.012, position_error=0.0009,
+    #   grid_pos=[0.04, 0.01], grid_pos_snapped=[0, 0],
+    #   stud_path='/World/Env_0/Baseplate', stud_interface=1,
+    #   hole_path='/World/Env_0/Brick', hole_interface=0)
+```
+
+Each `AssemblyDebugInfo` object carries the following fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `accepted` | `bool` | `True` if all thresholds were satisfied (connection was created) |
+| `relative_distance` | `float` | Signed stud–hole separation along Z in meters |
+| `tilt` | `float` | Z-axis tilt angle in radians |
+| `projected_force` | `float` | Compressive force along stud Z (negative = pushing in) |
+| `yaw_error` | `float` | Residual yaw error after C4 snap in radians |
+| `position_error` | `float` | Planar position error after grid snap in meters |
+| `grid_pos` | `tuple[float, float]` | Continuous XY position of hole relative to stud, in stud units |
+| `grid_pos_snapped` | `tuple[int, int]` | Nearest integer grid point — the proposed connection offset |
+| `stud_path` | `str` | USD prim path of the stud-side part |
+| `hole_path` | `str` | USD prim path of the hole-side part |
+
+---
+
+## Breakage Detection
+
+Once two parts are connected by a weld joint, the `BreakageChecker` monitors the joint each physics step for signs of overload. The checker uses a clutch-compliance model: it formulates and solves a quadratic programme (via OSQP) that distributes the measured impulse across all contact patches and stud clutches in the connected component. The solution yields a per-clutch *utilisation* scalar — the ratio of applied load to clutch capacity.
+
+When utilisation exceeds 1.0 (the preloaded clutch force is overcome), the connection is flagged for removal and a `ConnectionInfo` disassembly event is enqueued. A cooldown timer prevents the same interface pair from repeatedly connecting and disconnecting within a single episode.
+
+### Breakage Threshold Parameters
+
+| Parameter | Default | Description |
+|---|---|---|
+| `enabled` | `True` | Enable/disable breakage detection |
+| `clutch_axial_compliance` | `1.0` | Regularisation weight for axial (pull-out) stud forces |
+| `clutch_radial_compliance` | `1.0` | Regularisation weight for radial (shear) stud forces |
+| `clutch_tangential_compliance` | `1.0` | Regularisation weight for tangential (twist) stud forces |
+| `friction_coefficient` | `0.2` | Effective clutch friction coefficient |
+| `preloaded_force` | `3.5 N` | Nominal clutch preload — the force required to pull a stud free |
+| `breakage_cooldown_time` | `0.05 s` | Minimum time between disassembly events on the same interface pair |
+
+Configure breakage thresholds with `configure_breakage_thresholds()`:
+
+```python
+from bricksim.mdp.connection_thresholds import configure_breakage_thresholds
+
+configure_breakage_thresholds(
+    enabled=True,
+    preloaded_force=3.5,
+    friction_coefficient=0.2,
+    clutch_axial_compliance=1.0,
+    clutch_radial_compliance=1.0,
+    clutch_tangential_compliance=1.0,
+    breakage_cooldown_time=0.05,
+)
+```
+
+<Note>
+  The `AssembleBrickBaseEnvCfg` disables breakage detection by default (`configure_breakage_thresholds(enabled=False)`) because the single-brick assembly task does not require disassembly. Enable it explicitly when training disassembly or bi-directional manipulation policies.
+</Note>
+
+The `get_connection_utilization(connection_path)` function returns the per-connection utilisation scalar from the most recent breakage solve (`-1.0` if the bridge or physics graph is unavailable):
+
+```python
+from bricksim.core import get_connection_utilization
+
+util = get_connection_utilization("/World/Conn_0")
+# 0.0 = no load; 1.0 = at preload threshold; > 1.0 = exceeds threshold
+```
+
+---
+
+## Connection Events
+
+BrickSim maintains two internal FIFO queues — one for assembly events and one for disassembly events — that are populated by the physics step callback. Poll them at the Python level after each environment step:
+
+```python
+from bricksim.core import get_assembled_connections, get_disassembled_connections
+
+# Poll without consuming
+assembled = get_assembled_connections(clear=False)
+disassembled = get_disassembled_connections(clear=False)
+
+# Poll and consume (dequeue)
+assembled = get_assembled_connections(clear=True)
+disassembled = get_disassembled_connections(clear=True)
+```
+
+Each returned `ConnectionInfo` object describes the event in full:
+
+| Field | Type | Description |
+|---|---|---|
+| `physics_csid` | `int` | PhysX-internal connection segment ID |
+| `stud_path` | `str` | USD prim path of the stud-side part |
+| `hole_path` | `str` | USD prim path of the hole-side part |
+| `stud_ifid` | `int` | Interface ID on the stud part (`1` = stud face) |
+| `hole_ifid` | `int` | Interface ID on the hole part (`0` = hole face) |
+| `offset` | `tuple[int, int]` | Grid offset `(dx, dy)` of the connection in stud units |
+| `yaw` | `int` | C4 yaw index `0–3` |
+| `env_id` | `int` | Isaac Lab environment index |
+| `conn_path` | `Optional[str]` | USD prim path of the connection (if USD sync is enabled) |
+
+For Isaac Lab training, use the higher-level MDP helpers in `bricksim.mdp.connection_events` instead of polling the raw queues directly. These helpers cache results per environment step and mask events from sub-environments that were reset in the current step:
+
+```python
+from bricksim.mdp.connection_events import (
+    interface_pair_assembled_events,
+    interface_pair_disassembled_events,
+)
+from bricksim.mdp.connection_state import InterfacePairConnectionQuery
+
+query = InterfacePairConnectionQuery(
+    stud_name="lego_baseplate",
+    hole_name="lego_brick",
+    stud_if=1,
+    hole_if=0,
+)
+
+# Inside an MDP term function:
+events = interface_pair_assembled_events(env, query)
+# events.occurred: bool tensor of shape (num_envs,)
+# events.yaws:     long tensor of shape (num_envs,), -1 if not occurred
+```
+
+---
+
+## Yaw Snapping
+
+The `yaw` field in a `ConnectionInfo` or `JsonConnection` is a **C4 rotation index** — an element of the cyclic group of order 4. The mapping is:
+
+| Yaw index | Rotation |
+|---|---|
+| `0` | 0° |
+| `1` | 90° |
+| `2` | 180° |
+| `3` | 270° |
+
+During assembly detection the `AssemblyChecker` computes the continuous yaw angle between the stud and hole coordinate frames using `atan2`, then calls `nearest_c4()` to find the closest C4 rotation. The angular residual after snapping is the `yaw_error` checked against `yaw_tolerance`. This means the robot only needs to align the brick to within ±45° of a valid 90° increment — the simulator snaps to the nearest valid orientation.
+
+<Tip>
+  The `reward_yaw_align` reward term in `bricksim.envs.assemble_brick.mdp.rewards` provides a shaped signal that drives the policy to reduce yaw error before attempting insertion, making the final snap more reliable.
+</Tip>

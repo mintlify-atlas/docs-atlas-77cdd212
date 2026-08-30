@@ -1,0 +1,328 @@
+---
+title: "Brick Part Allocation: allocate_brick_part and Friends"
+sidebarTitle: "Brick Parts"
+description: "Reference for bricksim.core brick part allocation and deallocation functions — allocate_brick_part, allocate_unmanaged_brick_part, deallocate_part, and compute_structure_transforms."
+---
+
+The `bricksim.core` module exposes the C++ native extension through a Python binding. All brick part functions create and manage USD prims in the active Isaac Sim stage, bridging NVIDIA PhysX rigid-body simulation with the USD scene graph so that every brick allocated here is immediately visible in both the Isaac Lab environment and the Omniverse viewport.
+
+---
+
+## `allocate_brick_part`
+
+```python
+def allocate_brick_part(
+    dimensions: tuple[int, int, int],
+    color: tuple[int, int, int],
+    env_id: int,
+    rot: Optional[tuple[float, float, float, float]] = None,
+    pos: Optional[tuple[float, float, float]] = None,
+) -> str
+```
+
+Allocates a managed brick part prim in the active stage under the environment scope identified by `env_id`. The brick is registered with BrickSim's internal part tracker so that `deallocate_all_managed` can clean it up during environment reset.
+
+<ParamField path="dimensions" type="tuple[int, int, int]" required>
+  `(L, W, H)` brick size in stud and plate units. `L` is the length along the X-axis in studs, `W` is the width along the Y-axis in studs, and `H` is the height in **plate units** (one standard LEGO brick equals 3 plates).
+</ParamField>
+
+<ParamField path="color" type="tuple[int, int, int]" required>
+  `(R, G, B)` color of the brick. Each channel is an integer in the range 0–255.
+</ParamField>
+
+<ParamField path="env_id" type="int" required>
+  Integer index of the Isaac Lab environment that owns this brick. Pass `-1` to create a scene-level brick that is not scoped to any environment (useful for fixed obstacles and table props).
+</ParamField>
+
+<ParamField path="rot" type="Optional[tuple[float, float, float, float]]" default="None">
+  Initial orientation as a **wxyz** quaternion `(w, x, y, z)`. Defaults to the identity quaternion `(1, 0, 0, 0)`.
+</ParamField>
+
+<ParamField path="pos" type="Optional[tuple[float, float, float]]" default="None">
+  Initial position `(x, y, z)` in **meters** in the world frame. Defaults to the origin `(0, 0, 0)`.
+</ParamField>
+
+**Returns** `str` — the USD prim path of the newly created brick part (e.g. `"/World/envs/env_0/BrickPart_42"`).
+
+### Example
+
+```python
+import bricksim.core as core
+
+# Allocate a 2×4 standard brick (height = 3 plates = 1 brick) in env 0
+path = core.allocate_brick_part(
+    dimensions=(4, 2, 3),
+    color=(255, 0, 0),       # red
+    env_id=0,
+    pos=(0.0, 0.0, 0.05),   # 5 cm above the origin
+)
+print(path)  # /World/envs/env_0/BrickPart_0
+```
+
+---
+
+## `allocate_unmanaged_brick_part`
+
+```python
+def allocate_unmanaged_brick_part(
+    dimensions: tuple[int, int, int],
+    color: tuple[int, int, int],
+    path: str,
+) -> None
+```
+
+Allocates a brick at a **specific USD path** without registering it with BrickSim's environment management system. This is useful for loading pre-placed bricks whose paths are already known (e.g., bricks authored in a USD template file), or for parts that must persist across environment resets.
+
+<ParamField path="dimensions" type="tuple[int, int, int]" required>
+  `(L, W, H)` brick size in stud and plate units. Same convention as `allocate_brick_part`.
+</ParamField>
+
+<ParamField path="color" type="tuple[int, int, int]" required>
+  `(R, G, B)` color, each channel 0–255.
+</ParamField>
+
+<ParamField path="path" type="str" required>
+  The absolute USD prim path at which the brick should be created (e.g. `"/World/StaticBricks/Base"`). The parent prim must already exist in the stage.
+</ParamField>
+
+**Returns** `None`.
+
+<Note>
+  Because this brick is unmanaged, it will **not** be cleaned up by `deallocate_all_managed`. You must manually call `deallocate_part` with its path when it should be removed.
+</Note>
+
+---
+
+## `deallocate_part`
+
+```python
+def deallocate_part(part_path: str) -> bool
+```
+
+Removes the brick USD prim and releases all associated PhysX rigid-body and collision resources. Safe to call on both managed and unmanaged parts.
+
+<ParamField path="part_path" type="str" required>
+  The USD prim path returned by `allocate_brick_part`, or the path passed to `allocate_unmanaged_brick_part`.
+</ParamField>
+
+**Returns** `bool` — `True` if the part was found and successfully removed, `False` if the path did not correspond to a known brick part.
+
+---
+
+## `deallocate_all_managed`
+
+```python
+def deallocate_all_managed(env_id: int) -> bool
+```
+
+Removes **all** managed brick parts and their associated connections for the given environment ID in a single batch call. This is the recommended way to reset the brick state at the start of each episode.
+
+<ParamField path="env_id" type="int" required>
+  The environment index whose managed parts and connections should be removed.
+</ParamField>
+
+**Returns** `bool` — `True` on success.
+
+### Example
+
+```python
+# In your env reset logic:
+core.deallocate_all_managed(env_id=0)
+```
+
+---
+
+## `arrange_parts_in_workspace`
+
+```python
+def arrange_parts_in_workspace(
+    workspace_path: str,
+    parts_to_arrange: list[str],
+    structure_ids: Optional[list[int]] = None,
+) -> tuple[list[str], list[str]]
+```
+
+Arranges the given brick parts within a USD workspace prim — a box volume authored in the stage that defines the allowed placement region. Parts are positioned so they do not intersect each other or the workspace boundaries.
+
+<ParamField path="workspace_path" type="str" required>
+  USD prim path of the workspace box volume (e.g. `"/World/Workspace"`). This prim must have a bounding box that defines the valid placement region.
+</ParamField>
+
+<ParamField path="parts_to_arrange" type="list[str]" required>
+  List of USD prim paths for the brick parts to be placed inside the workspace.
+</ParamField>
+
+<ParamField path="structure_ids" type="Optional[list[int]]" default="None">
+  Optional list of structure IDs (one per part) that group parts into rigid sub-assemblies. Parts sharing a structure ID are placed together as a unit without separation.
+</ParamField>
+
+**Returns** `tuple[list[str], list[str]]` — `(arranged, not_arranged)`, where each element is a list of USD prim paths. Parts in `not_arranged` could not be placed due to workspace capacity constraints.
+
+---
+
+## `arrange_parts_on_table`
+
+```python
+def arrange_parts_on_table(
+    parts_to_arrange: list[str],
+    parts_to_avoid: Optional[list[str]],
+    obstacles: Optional[list[tuple[float, float, float, float]]],
+    table_xy: tuple[float, float, float, float],
+    table_z: float,
+    clearance_xy: Optional[float],
+    grid_resolution: Optional[float],
+    allow_rotation: Optional[bool],
+    avoid_all_other_parts: Optional[bool],
+    structure_ids: Optional[list[int]] = None,
+) -> tuple[list[str], list[str]]
+```
+
+Places brick parts on a flat table surface, avoiding a set of obstacle regions and optionally other parts already on the table.
+
+<ParamField path="parts_to_arrange" type="list[str]" required>
+  List of USD prim paths for the bricks that need to be placed on the table.
+</ParamField>
+
+<ParamField path="parts_to_avoid" type="Optional[list[str]]">
+  USD prim paths of parts already on the table that the newly arranged parts must not overlap.
+</ParamField>
+
+<ParamField path="obstacles" type="Optional[list[tuple[float, float, float, float]]]">
+  Axis-aligned obstacle regions in world XY, each specified as `(x_min, y_min, x_max, y_max)` in meters (e.g., robot base footprint, clutter zones). Parts will not be placed inside these regions.
+</ParamField>
+
+<ParamField path="table_xy" type="tuple[float, float, float, float]" required>
+  The valid placement surface extent `(x_min, y_min, x_max, y_max)` in meters.
+</ParamField>
+
+<ParamField path="table_z" type="float" required>
+  The Z height of the table surface in meters. Parts are placed with their bottom face flush with this height.
+</ParamField>
+
+<ParamField path="clearance_xy" type="Optional[float]">
+  Minimum gap in meters between placed parts and between parts and obstacles. Defaults to a sensible value derived from brick geometry when `None`.
+</ParamField>
+
+<ParamField path="grid_resolution" type="Optional[float]">
+  Snapping resolution for the placement grid in meters. Smaller values allow denser packing but increase computation time.
+</ParamField>
+
+<ParamField path="allow_rotation" type="Optional[bool]">
+  Whether parts may be rotated by 90° increments to improve packing density. Defaults to `True` when `None`.
+</ParamField>
+
+<ParamField path="avoid_all_other_parts" type="Optional[bool]">
+  When `True`, the placer queries all brick parts currently in the stage (not only those in `parts_to_avoid`) and avoids them.
+</ParamField>
+
+<ParamField path="structure_ids" type="Optional[list[int]]" default="None">
+  Optional structure IDs grouping parts into rigid sub-assemblies that are placed as a unit.
+</ParamField>
+
+**Returns** `tuple[list[str], list[str]]` — `(arranged, not_arranged)`.
+
+### Example
+
+```python
+arranged, failed = core.arrange_parts_on_table(
+    parts_to_arrange=part_paths,
+    parts_to_avoid=None,
+    obstacles=None,
+    table_xy=(-0.4, -0.3, 0.4, 0.3),
+    table_z=0.0,
+    clearance_xy=0.005,
+    grid_resolution=0.008,
+    allow_rotation=True,
+    avoid_all_other_parts=False,
+)
+print(f"Placed {len(arranged)} parts, {len(failed)} did not fit.")
+```
+
+---
+
+## `compute_obstacle_regions`
+
+```python
+def compute_obstacle_regions(
+    obstacle_paths: list[str],
+    table_xy: tuple[float, float, float, float],
+    table_z: float,
+    clearance_height: float,
+) -> list[tuple[float, float, float, float]]
+```
+
+Projects a list of USD prim obstacles onto the table plane and returns their axis-aligned footprints. The result can be passed directly to `arrange_parts_on_table`'s `obstacles` argument.
+
+<ParamField path="obstacle_paths" type="list[str]" required>
+  USD prim paths of obstacles to project (e.g. robot base, clamps, fixtures).
+</ParamField>
+
+<ParamField path="table_xy" type="tuple[float, float, float, float]" required>
+  Table surface extent `(x_min, y_min, x_max, y_max)` in meters — only obstacles overlapping this region are returned.
+</ParamField>
+
+<ParamField path="table_z" type="float" required>
+  Table surface Z height in meters.
+</ParamField>
+
+<ParamField path="clearance_height" type="float" required>
+  Vertical clearance above the table in meters. Only obstacle geometry within `[table_z, table_z + clearance_height]` is projected.
+</ParamField>
+
+**Returns** `list[tuple[float, float, float, float]]` — list of `(x_min, y_min, x_max, y_max)` obstacle footprints.
+
+---
+
+## `compute_structure_transforms`
+
+```python
+def compute_structure_transforms(
+    json: Any,
+    root: int,
+) -> dict[int, tuple[tuple[float, float, float, float], tuple[float, float, float]]]
+```
+
+Given a `JsonTopology` dict and a root part ID, computes the world-frame transforms of all parts in the structure as if the root part were placed at the origin with identity rotation.
+
+<ParamField path="json" type="Any" required>
+  A `JsonTopology` dict as produced by `export_lego` or loaded from a `.json` file. See the [Topology Schema](/api/topology/schema) reference for the expected structure.
+</ParamField>
+
+<ParamField path="root" type="int" required>
+  The integer part ID (from the topology) to use as the pose reference. All other transforms are expressed relative to this part at identity.
+</ParamField>
+
+**Returns** `dict[int, tuple[tuple[float, float, float, float], tuple[float, float, float]]]` — a mapping from part ID to `(wxyz_quat, xyz_pos)` where `wxyz_quat` is `(w, x, y, z)` and `xyz_pos` is in meters.
+
+### Example
+
+```python
+import json
+
+with open("structure.json") as f:
+    topology = json.load(f)
+
+transforms = core.compute_structure_transforms(topology, root=0)
+for part_id, (quat, pos) in transforms.items():
+    print(f"Part {part_id}: pos={pos}, rot={quat}")
+```
+
+---
+
+## `update_part_prototypes`
+
+```python
+def update_part_prototypes() -> None
+```
+
+Rebuilds the internal USD prototype prims for all brick dimensions known to the native extension. Call this after registering new brick sizes so that subsequent `allocate_brick_part` calls use the updated geometry. Under normal usage (standard LEGO dimensions only) this does not need to be called manually.
+
+**Returns** `None`.
+
+---
+
+## See Also
+
+- **`export_lego` / `import_lego`** — serialize and deserialize complete multi-brick assemblies as `JsonTopology` dicts. See the [Connections](/api/core/connections) reference for full documentation.
+- **`create_connection`** — manually weld two brick parts together. See [Connections](/api/core/connections).
+- **Assembly Thresholds** — control when the physics engine auto-creates connections. See [Thresholds](/api/core/thresholds).

@@ -1,0 +1,100 @@
+---
+title: "Build the BrickSim C++ Native Extension from Source"
+sidebarTitle: "Building from Source"
+description: "Compile the BrickSim C++ native extension using pixi and CMake, run the native test suite, and generate type checker configurations for IDE support."
+---
+
+BrickSim's physics engine is implemented as a C++ module compiled against the NVIDIA Isaac Sim / PhysX SDK. The compiled artifact is a pybind11 extension that is loaded automatically when you `import bricksim.core`. Building from source is required when you modify native code — for example, adding new connection constraint logic, extending the USD allocator, or integrating custom overlap detection algorithms.
+
+<Note>
+  If you do not need to modify C++ code, you can skip the build entirely by downloading the prebuilt extension: `./scripts/download_prebuilt_native.sh`. The prebuilt binary is the fastest path to get started.
+</Note>
+
+## Prerequisites
+
+Before building, ensure you have the following:
+
+- **x86-64 Linux** — the native extension targets `linux-64` only; other platforms are not currently supported
+- **GLIBC ≥ 2.35 and GLIBCXX ≥ 3.4.30** — Ubuntu 22.04 and later satisfy this requirement
+- **NVIDIA GPU driver** compatible with [Isaac Sim 5.1.0 system requirements](https://docs.isaacsim.omniverse.nvidia.com/5.1.0/installation/requirements.html#system-requirements)
+- **[pixi package manager](https://pixi.prefix.dev/latest/installation/)** — pixi manages the exact compiler toolchain (Clang 22, CMake 4.3, Ninja 1.13) needed to reproduce the build
+
+## Building with pixi
+
+<Steps>
+
+### Install pixi
+
+Follow the official installation instructions at [https://pixi.prefix.dev/latest/installation/](https://pixi.prefix.dev/latest/installation/). Verify the installation:
+
+```bash
+pixi --version
+```
+
+### Clone the repository
+
+```bash
+git clone https://github.com/intelligent-control-lab/BrickSim BrickSim
+cd BrickSim
+```
+
+### Build the release extension
+
+```bash
+pixi run build-native
+```
+
+pixi resolves the full compiler toolchain from `pixi.toml`, fetches the Isaac Sim SDK headers declared in `native/isaac_deps.toml`, and invokes CMake with the release preset. The first run downloads several hundred megabytes of SDK dependencies; subsequent builds are incremental.
+
+### Verify the import
+
+The compiled extension is placed next to the Python package so `import bricksim.core` picks it up automatically:
+
+```bash
+uv run python -c "import bricksim.core; print('native extension loaded')"
+```
+
+</Steps>
+
+## Running the C++ Test Suite
+
+Two pixi tasks exercise the native test binary. Both build first if the output is stale, then run all registered C++ unit tests:
+
+```bash
+# Build and run tests in debug mode (includes assertions and sanitizers)
+pixi run test-native-debug
+
+# Build and run tests in release mode (optimised, matches the shipped binary)
+pixi run test-native-release
+```
+
+Use `test-native-debug` during development to catch assertion failures and memory errors early. Use `test-native-release` before submitting a pull request to confirm that optimised builds produce the same results.
+
+## Repository Structure for Native Code
+
+All C++ source lives under the `native/` directory. The table below describes each subdirectory:
+
+| Path | Purpose |
+|---|---|
+| `native/modules/bricksim/` | Top-level C++ module source files (`.cppm`) |
+| `native/modules/bricksim/core/` | Connection graph (`graph.cppm`), component index, mass computation, brick specs, and contact connections |
+| `native/modules/bricksim/physx/` | PhysX assembly, breakage detection, constraint scheduling, overlap detection, weld constraints, and OSQP integration |
+| `native/modules/bricksim/usd/` | USD stage allocator, geometry authoring, arrangement, material assignment, and USD graph management |
+| `native/modules/bricksim/io/` | Topology JSON serialization and deserialization (`topology.cppm`) |
+| `native/py/` | pybind11 Python binding module — exposes the C++ API to `bricksim.core` |
+| `native/cmake/` | CMake find-modules and toolchain helpers (`FetchIsaacDeps.cmake`, `FetchSourceDeps.cmake`, `AbiCheck.cmake`, `BrickSimChecks.cmake`, `PrepareArtifacts.cmake`) |
+| `native/tests/` | C++ unit tests executed by `test-native-debug` and `test-native-release` |
+
+## Type Checker Configuration
+
+After building the native extension, generate the `ty` type stub configuration so your IDE can resolve Isaac Sim's type information and provide accurate auto-completion:
+
+```bash
+uv run bricksim-type-configs
+```
+
+This writes a `ty` configuration file that points the type checker at Isaac Sim's bundled stubs and the compiled native extension. We recommend installing the [ty VSCode extension](https://marketplace.visualstudio.com/items?itemName=astral-sh.ty) for fast, accurate completion across Isaac Sim's large dependency tree.
+
+<Warning>
+  The native extension is tightly coupled to the Isaac Sim version it was compiled against (currently **5.1.0**). Never mix extension binaries compiled for different Isaac Sim versions — doing so will cause undefined behaviour or an immediate segfault at import time. Always rebuild from source after upgrading Isaac Sim.
+</Warning>

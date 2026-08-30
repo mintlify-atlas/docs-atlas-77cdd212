@@ -1,0 +1,191 @@
+---
+title: "Brick Topology: Representing Multi-Brick Assemblies in JSON"
+sidebarTitle: "Brick Topology"
+description: "The JsonTopology schema encodes LEGO brick assemblies as parts, stud-hole connections, and pose hints. Learn the format and how to import/export it."
+---
+
+BrickSim represents multi-brick assemblies as a typed JSON document called a `JsonTopology`. The format captures everything needed to reconstruct a brick structure in simulation: the dimensions and colour of every part, the stud–hole connection graph between parts, and one pose hint per connected component that anchors the structure in world space. Because the schema is self-contained and human-readable, it serves as the canonical interchange format for saving, loading, procedurally generating, and converting brick assemblies from external tools.
+
+## Schema Overview
+
+A valid topology document has exactly four top-level keys:
+
+| Key | Type | Description |
+|---|---|---|
+| `schema` | `string` | Always `"bricksim/lego_topology@2"`. Used to distinguish topology JSON from other BrickSim document types. |
+| `parts` | `list[JsonPart]` | Ordered list of brick parts. Each part carries a numeric `id` used by connections. |
+| `connections` | `list[JsonConnection]` | Directed list of stud–hole connections. Each entry references two part IDs by `stud_id` / `hole_id`. |
+| `pose_hints` | `list[JsonPoseHint]` | One anchor per connected component. The anchor part's world position and orientation seed the import transform. |
+
+The full Python `TypedDict` definitions that mirror the native C++ structs are:
+
+```python
+class JsonBrickPayload(TypedDict):
+    L: int          # length in studs (X axis)
+    W: int          # width in studs  (Y axis)
+    H: int          # height in plates (Z axis)
+    color: list[int]  # [r, g, b], each 0–255
+
+class JsonPart(TypedDict):
+    id: int
+    type: Literal["brick"]
+    payload: JsonBrickPayload
+
+class JsonConnection(TypedDict):
+    id: int
+    stud_id: int    # id of the part providing studs
+    stud_iface: int # interface index on the stud part (1 = stud face)
+    hole_id: int    # id of the part providing holes
+    hole_iface: int # interface index on the hole part (0 = hole face)
+    offset: list[int]   # [x, y] in studs, position of hole origin relative to stud origin
+    yaw: int            # 0–3, C4 rotation index (multiples of 90°)
+
+class JsonPoseHint(TypedDict):
+    part: int           # id of the anchor part in this connected component
+    pos: list[float]    # [x, y, z] in meters
+    rot: list[float]    # [w, x, y, z] quaternion
+```
+
+A minimal two-brick tower looks like this:
+
+```json
+{
+  "schema": "bricksim/lego_topology@2",
+  "parts": [
+    {"id": 0, "type": "brick", "payload": {"L": 2, "W": 4, "H": 3, "color": [255, 0, 0]}},
+    {"id": 1, "type": "brick", "payload": {"L": 2, "W": 4, "H": 3, "color": [0, 0, 255]}}
+  ],
+  "connections": [
+    {"id": 0, "stud_id": 0, "stud_iface": 1, "hole_id": 1, "hole_iface": 0,
+     "offset": [0, 0], "yaw": 0}
+  ],
+  "pose_hints": [
+    {"part": 0, "pos": [0.3, 0.0, 0.0], "rot": [1.0, 0.0, 0.0, 0.0]}
+  ]
+}
+```
+
+---
+
+## Importing a Topology
+
+`bricksim.core.import_lego()` parses a topology dict and spawns all brick parts and connections into the active USD stage. It returns two dicts mapping JSON part/connection IDs to their newly allocated USD prim paths.
+
+```python
+import json
+from bricksim.core import import_lego
+
+with open("my_structure.json") as f:
+    topology = json.load(f)
+
+part_paths, conn_paths = import_lego(
+    json=topology,
+    env_id=-1,              # -1 places parts outside any per-environment scope
+    ref_pos=(0.3, 0.0, 0.0),
+    ref_rot=(1.0, 0.0, 0.0, 0.0),
+)
+
+# part_paths: {0: "/World/Brick_0", 1: "/World/Brick_1", ...}
+# conn_paths: {0: "/World/Conn_0", ...}
+```
+
+The `ref_pos` and `ref_rot` arguments define the world transform of the pose-hint anchor. All other parts in the same connected component are placed relative to that anchor using the connection graph.
+
+<Tip>
+  Pass `env_id` matching the Isaac Lab environment index (0-based) so that the allocator places bricks under the correct `/World/Env_{N}/` scope and can clean them up automatically on episode reset via `deallocate_all_managed(env_id)`.
+</Tip>
+
+---
+
+## Exporting a Topology
+
+`bricksim.core.export_lego()` serialises the current USD graph for a given environment back into a `JsonTopology` dict. The result can be saved to disk or fed back into `import_lego()`.
+
+```python
+from bricksim.core import export_lego
+import json
+
+topology = export_lego(env_id=0)
+
+with open("snapshot.json", "w") as f:
+    json.dump(topology, f, indent=2)
+```
+
+Only parts and connections that were allocated under `env_id` are included in the export. Use `env_id=-1` to export all globally managed parts.
+
+---
+
+## Supported Input Formats
+
+BrickSim can load brick structures from three source formats. The `schema` key is the fastest way to tell them apart programmatically:
+
+<CardGroup cols={3}>
+  <Card title="BrickSim Topology JSON" icon="file-code">
+    The native format. The top-level dict contains a `"schema"` key equal to `"bricksim/lego_topology@2"`. Pass directly to `import_lego()`.
+  </Card>
+  <Card title="Legolization JSON" icon="rotate">
+    Output of the [Legolization](https://github.com/qibinhang/legolization) pipeline. Top-level keys are digit strings (`"1"`, `"2"`, …), each containing `brick_id`, `x`, `y`, `z`, `ori`. Convert with `legolization_json_to_topology_json()`.
+  </Card>
+  <Card title="StableText2Brick Text" icon="font">
+    Plain-text line format produced by StableText2Brick. Detect with `is_bricks_text()` and convert with `bricks_text_to_topology_json()`.
+  </Card>
+</CardGroup>
+
+Use the following pattern to auto-detect and normalise any of the three formats before calling `import_lego()`:
+
+```python
+import json
+from bricksim.topology.legolization import (
+    legolization_json_to_topology_json,
+    is_legolization_json,
+)
+from bricksim.topology.stabletext2brick import (
+    bricks_text_to_topology_json,
+    is_bricks_text,
+)
+
+with open(path) as f:
+    text = f.read()
+
+if is_bricks_text(text):
+    # StableText2Brick plain-text format
+    topology = bricks_text_to_topology_json(text, color=(255, 0, 0))
+elif is_legolization_json(text):
+    # Legolization task-graph JSON
+    topology = legolization_json_to_topology_json(json.loads(text), color=(255, 0, 0))
+else:
+    # Assume direct BrickSim topology JSON
+    topology = json.loads(text)
+```
+
+Both `legolization_json_to_topology_json()` and `bricks_text_to_topology_json()` accept an optional `color` argument as an `(r, g, b)` tuple or a list of per-brick `(r, g, b)` tuples. When `color=None` all bricks default to white `(255, 255, 255)`.
+
+<Note>
+  `is_legolization_json()` applies only a lightweight structural heuristic: it checks that at least one digit key maps to a dict with the five required fields (`brick_id`, `x`, `y`, `z`, `ori`). It does not validate every entry. Similarly, `is_bricks_text()` inspects only the first few lines of the input.
+</Note>
+
+---
+
+## Brick Geometry Conventions
+
+Understanding the coordinate system used by topology documents is important when computing target poses or writing importers for new formats.
+
+<CardGroup cols={2}>
+  <Card title="XY Plane (stud grid)" icon="grid">
+    One stud unit = **8.0 mm** in X and Y (`BrickUnitLength = 0.008`). A 2×4 brick occupies 16 mm × 32 mm in the XY plane. The brick origin is at the **centre** of the bottom face.
+  </Card>
+  <Card title="Z Axis (height)" icon="arrow-up">
+    One plate unit = **3.2 mm** in Z (`PlateUnitHeight = 0.0032`). A standard brick is 3 plates tall (9.6 mm body + 1.7 mm stud = 11.3 mm total). Height `H` in the JSON is always expressed in plates.
+  </Card>
+</CardGroup>
+
+**Interface IDs** on a `BrickPart` are fixed constants defined in the native `BrickPart` class:
+
+| ID | Name | Face | `InterfaceType` |
+|---|---|---|---|
+| `0` | `HoleId` | Bottom face (−Z) | `Hole` — z-axis points inward (downward) |
+| `1` | `StudId` | Top face (+Z) | `Stud` — z-axis points outward (upward) |
+
+**Connection offset** `[x, y]` is the position of the hole interface origin relative to the stud interface origin, measured in stud units on the XY grid. An offset of `[0, 0]` means the two interfaces are directly stacked.
+
+**Yaw** is a C4 rotation index in `{0, 1, 2, 3}`, corresponding to rotations of 0°, 90°, 180°, and 270° around the shared Z axis of the stud–hole pair. See [Connection Model → Yaw Snapping](/concepts/connection-model#yaw-snapping) for how this is snapped during assembly detection.

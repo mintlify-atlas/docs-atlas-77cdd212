@@ -1,0 +1,455 @@
+---
+title: "Connection Management: create_connection, import_lego, and Queries"
+sidebarTitle: "Connections"
+description: "Reference for bricksim.core connection creation, import/export, transform computation, and connection query functions."
+---
+
+Connection functions create, query, and serialize stud-hole connections between brick parts in the active simulation. Each connection is represented as a **rigid weld joint** in PhysX and as a USD prim in the stage, making the assembly graph simultaneously visible to the physics solver and to tooling that reads the USD scene graph.
+
+---
+
+## `create_connection`
+
+```python
+def create_connection(
+    stud_path: str,
+    stud_if: int,
+    hole_path: str,
+    hole_if: int,
+    offset: tuple[int, int],
+    yaw: int,
+) -> str
+```
+
+Creates a rigid weld joint between the stud face of one brick and the hole face of another. The joint is encoded using the discrete LEGO connection coordinate system (stud-unit offsets and C4 yaw indices) for robust round-trip serialization.
+
+<ParamField path="stud_path" type="str" required>
+  USD prim path of the brick that provides the stud (male) interface.
+</ParamField>
+
+<ParamField path="stud_if" type="int" required>
+  Interface ID on the stud brick that participates in this connection. `1` identifies the top/stud face of a standard brick.
+</ParamField>
+
+<ParamField path="hole_path" type="str" required>
+  USD prim path of the brick that provides the hole (female) interface.
+</ParamField>
+
+<ParamField path="hole_if" type="int" required>
+  Interface ID on the hole brick. `0` identifies the bottom/hole face of a standard brick.
+</ParamField>
+
+<ParamField path="offset" type="tuple[int, int]" required>
+  `(dx, dy)` displacement in **stud units** of the hole brick's origin relative to the stud brick's stud interface origin. For a 1×1 brick placed directly on top of a 1×1 brick the offset is `(0, 0)`.
+</ParamField>
+
+<ParamField path="yaw" type="int" required>
+  C4 rotation index: `0` = 0°, `1` = 90°, `2` = 180°, `3` = 270°. Only these four orientations are physically valid for interlocking bricks.
+</ParamField>
+
+**Returns** `str` — the USD prim path of the newly created connection prim.
+
+### Example
+
+```python
+import bricksim.core as core
+
+# Stack brick_b directly on top of brick_a with no rotation
+conn_path = core.create_connection(
+    stud_path="/World/envs/env_0/BrickPart_0",
+    stud_if=1,
+    hole_path="/World/envs/env_0/BrickPart_1",
+    hole_if=0,
+    offset=(0, 0),
+    yaw=0,
+)
+print(conn_path)  # /World/envs/env_0/Connection_0
+```
+
+---
+
+## `deallocate_connection`
+
+```python
+def deallocate_connection(connection_path: str) -> bool
+```
+
+Destroys the USD connection prim and removes the underlying PhysX weld joint, breaking the bond between the two bricks.
+
+<ParamField path="connection_path" type="str" required>
+  USD prim path of the connection, as returned by `create_connection` or stored in `ConnectionInfo.conn_path`.
+</ParamField>
+
+**Returns** `bool` — `True` if the connection was found and successfully removed.
+
+---
+
+## `import_lego`
+
+```python
+def import_lego(
+    json: Any,
+    env_id: int,
+    ref_rot: Optional[tuple[float, float, float, float]] = None,
+    ref_pos: Optional[tuple[float, float, float]] = None,
+) -> tuple[dict[int, str], dict[int, str]]
+```
+
+Instantiates all parts and connections described by a `JsonTopology` dict into the active Isaac Sim stage. This is the primary way to load pre-authored LEGO assemblies for a training episode.
+
+<ParamField path="json" type="Any" required>
+  A `JsonTopology` dict. Typically produced by `export_lego` or loaded from a `.json` file. See the [Topology Schema](/api/topology/schema) reference for the format.
+</ParamField>
+
+<ParamField path="env_id" type="int" required>
+  Environment index that will own the spawned parts. All created parts are registered as managed parts under this ID.
+</ParamField>
+
+<ParamField path="ref_rot" type="Optional[tuple[float, float, float, float]]" default="None">
+  World-frame anchor rotation as a **wxyz** quaternion applied to the entire assembly. Defaults to identity `(1, 0, 0, 0)`.
+</ParamField>
+
+<ParamField path="ref_pos" type="Optional[tuple[float, float, float]]" default="None">
+  World-frame anchor translation `(x, y, z)` in meters applied to the entire assembly. Defaults to the origin.
+</ParamField>
+
+**Returns** `tuple[dict[int, str], dict[int, str]]` — `(part_id_to_path, conn_id_to_path)`, mapping topology integer IDs to USD prim path strings.
+
+### Example
+
+```python
+import json
+import bricksim.core as core
+
+with open("assembly.json") as f:
+    topology = json.load(f)
+
+part_map, conn_map = core.import_lego(
+    json=topology,
+    env_id=0,
+    ref_pos=(0.0, 0.0, 0.02),  # place 2 cm above the floor
+)
+print(f"Loaded {len(part_map)} parts and {len(conn_map)} connections.")
+```
+
+---
+
+## `export_lego`
+
+```python
+def export_lego(env_id: int) -> Any
+```
+
+Serializes the current state of all managed parts and connections for the given environment into a `JsonTopology` dict. The returned dict can be written to disk, sent over a network, or passed back to `import_lego` for round-trip fidelity.
+
+<ParamField path="env_id" type="int" required>
+  Environment index whose managed parts and connections are serialized.
+</ParamField>
+
+**Returns** `Any` — a `JsonTopology` dict. See the [Topology Schema](/api/topology/schema) reference.
+
+---
+
+## `compute_connection_transform`
+
+```python
+def compute_connection_transform(
+    stud_path: str,
+    stud_if: int,
+    hole_path: str,
+    hole_if: int,
+    offset: tuple[int, int],
+    yaw: int,
+) -> tuple[tuple[float, float, float, float], tuple[float, float, float]]
+```
+
+Computes the **world-frame** pose of the hole brick if it were assembled onto the stud brick at the given offset and yaw, without actually creating a connection. Useful for checking poses before committing to assembly.
+
+<ParamField path="stud_path" type="str" required>
+  USD prim path of the stud brick.
+</ParamField>
+
+<ParamField path="stud_if" type="int" required>
+  Interface ID on the stud brick.
+</ParamField>
+
+<ParamField path="hole_path" type="str" required>
+  USD prim path of the hole brick.
+</ParamField>
+
+<ParamField path="hole_if" type="int" required>
+  Interface ID on the hole brick.
+</ParamField>
+
+<ParamField path="offset" type="tuple[int, int]" required>
+  `(dx, dy)` in stud units.
+</ParamField>
+
+<ParamField path="yaw" type="int" required>
+  C4 rotation index 0–3.
+</ParamField>
+
+**Returns** `tuple[tuple[float, float, float, float], tuple[float, float, float]]` — `(wxyz_quat, xyz_pos)` of the hole brick in world space.
+
+---
+
+## `compute_connection_local_transform`
+
+```python
+def compute_connection_local_transform(
+    stud_path: str,
+    stud_if: int,
+    hole_path: str,
+    hole_if: int,
+    offset: tuple[int, int],
+    yaw: int,
+) -> tuple[
+    tuple[tuple[float, float, float, float], tuple[float, float, float]],
+    tuple[tuple[float, float, float, float], tuple[float, float, float]],
+]
+```
+
+Like `compute_connection_transform` but returns transforms expressed in **each brick's local frame** rather than world space. This is the form required to set up PhysX joint frames manually.
+
+**Returns** — `(stud_local_transform, hole_local_transform)`, each as `(wxyz_quat, xyz_pos)`.
+
+---
+
+## `compute_graph_transform`
+
+```python
+def compute_graph_transform(
+    a_path: str,
+    b_path: str,
+) -> tuple[tuple[float, float, float, float], tuple[float, float, float]]
+```
+
+Traverses the connection graph and returns the **relative transform** from brick `a` to brick `b`, accumulated over the chain of connections linking them.
+
+<ParamField path="a_path" type="str" required>
+  USD prim path of the source brick.
+</ParamField>
+
+<ParamField path="b_path" type="str" required>
+  USD prim path of the target brick.
+</ParamField>
+
+**Returns** `tuple[tuple[float, float, float, float], tuple[float, float, float]]` — `(wxyz_quat, xyz_pos)` of `b` expressed in `a`'s frame.
+
+---
+
+## `compute_connected_component`
+
+```python
+def compute_connected_component(part_path: str) -> tuple[list[str], list[str]]
+```
+
+Performs a graph search from `part_path` and returns all brick parts and connections reachable through the connection graph.
+
+<ParamField path="part_path" type="str" required>
+  USD prim path of any brick in the component.
+</ParamField>
+
+**Returns** `tuple[list[str], list[str]]` — `(part_paths, connection_paths)`.
+
+---
+
+## `are_parts_connected`
+
+```python
+def are_parts_connected(part_a_path: str, part_b_path: str) -> bool
+```
+
+Returns `True` if `part_a` and `part_b` are in the same connected component (i.e., linked by a chain of one or more connections).
+
+<ParamField path="part_a_path" type="str" required>
+  USD prim path of the first brick.
+</ParamField>
+
+<ParamField path="part_b_path" type="str" required>
+  USD prim path of the second brick.
+</ParamField>
+
+**Returns** `bool`.
+
+---
+
+## `get_assembled_connections`
+
+```python
+def get_assembled_connections(clear: bool = False) -> list[ConnectionInfo]
+```
+
+Returns the list of connection events that were **created by the physics engine** since the last call. The queue accumulates events each physics step.
+
+<ParamField path="clear" type="bool" default="False">
+  When `True`, the internal event queue is flushed after reading so that subsequent calls return only newer events.
+</ParamField>
+
+**Returns** `list[ConnectionInfo]` — see [`ConnectionInfo`](#connectioninfo) below.
+
+---
+
+## `get_disassembled_connections`
+
+```python
+def get_disassembled_connections(clear: bool = False) -> list[ConnectionInfo]
+```
+
+Returns the list of connection events that were **broken by the physics engine** since the last call.
+
+<ParamField path="clear" type="bool" default="False">
+  When `True`, flushes the event queue after reading.
+</ParamField>
+
+**Returns** `list[ConnectionInfo]`.
+
+### Event polling example
+
+```python
+from bricksim.core import get_assembled_connections, get_disassembled_connections
+
+# Called once per simulation step in your observation/reward callback:
+new_connections = get_assembled_connections(clear=True)
+for conn in new_connections:
+    print(f"New connection: {conn.stud_path} -> {conn.hole_path} (yaw={conn.yaw})")
+
+broken_connections = get_disassembled_connections(clear=True)
+for conn in broken_connections:
+    print(f"Broken connection: {conn.conn_path}")
+```
+
+---
+
+## `lookup_physics_connection`
+
+```python
+def lookup_physics_connection(
+    stud_path: str,
+    stud_if: int,
+    hole_path: str,
+    hole_if: int,
+) -> ConnectionInfo | None
+```
+
+Looks up the current physics-layer connection between the specified stud/hole pair. Returns `None` if no active connection exists for that pair.
+
+<ParamField path="stud_path" type="str" required>
+  USD prim path of the stud brick.
+</ParamField>
+
+<ParamField path="stud_if" type="int" required>
+  Interface ID on the stud brick.
+</ParamField>
+
+<ParamField path="hole_path" type="str" required>
+  USD prim path of the hole brick.
+</ParamField>
+
+<ParamField path="hole_if" type="int" required>
+  Interface ID on the hole brick.
+</ParamField>
+
+**Returns** `ConnectionInfo | None`.
+
+---
+
+## `get_assembly_debug_infos`
+
+```python
+def get_assembly_debug_infos() -> list[AssemblyDebugInfo]
+```
+
+Returns per-candidate debug information produced by the assembly detector during the **last physics step**. Each entry corresponds to one stud-hole candidate that the detector evaluated, regardless of whether it was accepted. Use this to diagnose why connections are or are not forming.
+
+**Returns** `list[AssemblyDebugInfo]` — see [`AssemblyDebugInfo`](#assemblydebuginfo) below.
+
+---
+
+## `get_connection_utilization`
+
+```python
+def get_connection_utilization(connection_path: str) -> float
+```
+
+Returns the current load fraction of a connection joint — a value in `[0, 1]` indicating how close the joint is to its breakage threshold. Values near `1.0` indicate the connection is close to breaking.
+
+<ParamField path="connection_path" type="str" required>
+  USD prim path of the connection.
+</ParamField>
+
+**Returns** `float`.
+
+---
+
+## `get_usd_id_mappings`
+
+```python
+def get_usd_id_mappings() -> tuple[dict[str, int], dict[str, int]]
+```
+
+Returns `(part_path_to_usd_id, conn_path_to_usd_id)` — maps USD prim paths to BrickSim's internal integer IDs used in the USD layer.
+
+---
+
+## `get_physx_id_mappings`
+
+```python
+def get_physx_id_mappings() -> tuple[dict[str, int], dict[str, int]]
+```
+
+Returns `(part_path_to_physx_id, conn_path_to_physx_id)` — maps USD prim paths to PhysX actor/joint integer IDs.
+
+---
+
+## Data Classes
+
+### `ConnectionInfo`
+
+Returned by `get_assembled_connections`, `get_disassembled_connections`, and `lookup_physics_connection`. Contains the full cross-layer identity of a connection.
+
+| Field | Type | Description |
+|---|---|---|
+| `physics_csid` | `int` | PhysX internal connection (joint) ID |
+| `physics_stud_pid` | `int` | PhysX actor ID of the stud brick |
+| `physics_hole_pid` | `int` | PhysX actor ID of the hole brick |
+| `stud_ifid` | `int` | Interface ID on the stud brick |
+| `hole_ifid` | `int` | Interface ID on the hole brick |
+| `offset` | `tuple[int, int]` | `(dx, dy)` offset in stud units |
+| `yaw` | `int` | C4 rotation index 0–3 |
+| `env_id` | `int` | Environment index that owns this connection |
+| `usd_stud_pid` | `int` | BrickSim USD-layer part ID for the stud brick |
+| `usd_hole_pid` | `int` | BrickSim USD-layer part ID for the hole brick |
+| `stud_path` | `str` | USD prim path of the stud brick |
+| `hole_path` | `str` | USD prim path of the hole brick |
+| `usd_csid` | `Optional[int]` | BrickSim USD-layer connection ID, or `None` if not yet synced to USD |
+| `conn_path` | `Optional[str]` | USD prim path of the connection, or `None` if not yet synced |
+
+---
+
+### `AssemblyDebugInfo`
+
+Returned by `get_assembly_debug_infos`. Each instance represents one stud-hole candidate evaluated during the last physics step.
+
+| Field | Type | Description |
+|---|---|---|
+| `accepted` | `bool` | Whether this candidate was accepted and a connection created |
+| `relative_distance` | `float` | Normalized stud-hole separation (0 = perfect alignment) |
+| `tilt` | `float` | Measured tilt angle between stud and hole axes in radians |
+| `projected_force` | `float` | Contact force projected along the stud axis in newtons |
+| `yaw_error` | `float` | Residual yaw error after C4 snapping in radians |
+| `position_error` | `float` | Residual XY position error after grid snapping in meters |
+| `grid_pos` | `tuple[float, float]` | Continuous `(dx, dy)` position in stud units before snapping |
+| `grid_pos_snapped` | `tuple[int, int]` | Discrete `(dx, dy)` after snapping to stud grid |
+| `stud_path` | `str` | USD prim path of the stud brick |
+| `stud_interface` | `int` | Interface ID on the stud brick |
+| `hole_path` | `str` | USD prim path of the hole brick |
+| `hole_interface` | `int` | Interface ID on the hole brick |
+
+---
+
+## See Also
+
+- **[Brick Parts](/api/core/brick-parts)** — allocating and deallocating the brick prims that connections join.
+- **[Thresholds](/api/core/thresholds)** — configuring the geometric and force tolerances that govern automatic connection creation and breakage.
+- **[Topology Schema](/api/topology/schema)** — the `JsonTopology` dict format used by `import_lego` / `export_lego`.

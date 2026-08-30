@@ -1,0 +1,114 @@
+---
+title: "BrickSim Structures Dataset: 1000+ LEGO Model Catalog"
+sidebarTitle: "Structure Dataset"
+description: "Download and query the BrickSim structures dataset — a catalog of LEGO models with stability metadata, topology JSON paths, and category labels."
+---
+
+BrickSim ships a curated dataset of LEGO structure topology files paired with pre-computed stability metadata. The catalog is downloadable directly from Python via `load_bricksim_dataset()`, which fetches and extracts the archive on first use and caches it locally for all subsequent calls — no manual download step required.
+
+## Dataset Contents
+
+Every entry in the catalog is represented as a `BricksimDatasetItem` dataclass. The table below describes each field:
+
+| Field | Type | Description |
+|---|---|---|
+| `model_id` | `str` | Unique model identifier, used as the dictionary key |
+| `category` | `str` | High-level structure category (e.g. vehicle, building) |
+| `caption` | `str` | Human-readable description of the model |
+| `num_bricks` | `int` | Total number of bricks in the structure |
+| `json_path` | `Path` | Absolute path to the topology JSON file on disk |
+| `all_connected_no_plate` | `bool` | All bricks form a single connected component without a base plate |
+| `all_connected_with_plate` | `bool` | All bricks form a single connected component when a base plate is included |
+| `stable_with_plate` | `bool` | Structure is statically stable when placed on a base plate |
+| `max_stability_score_with_plate` | `float` | Maximum per-brick stability score computed with the base plate present (lower is more stable) |
+
+## Downloading the Dataset
+
+The dataset is downloaded automatically on first access when `download_if_not_available=True`. The function is asynchronous and returns a dictionary keyed by `model_id`:
+
+```python
+import asyncio
+from bricksim.structures import load_bricksim_dataset
+
+async def main():
+    dataset = await load_bricksim_dataset(download_if_not_available=True)
+    print(f"Loaded {len(dataset)} models")
+    for model_id, item in list(dataset.items())[:3]:
+        print(f"{model_id}: {item.caption} ({item.num_bricks} bricks)")
+
+asyncio.run(main())
+```
+
+The archive is downloaded from `https://www.cs.cmu.edu/~haoweiw/bricksim_downloads/bricksim_dataset.tar.xz` and extracted in place. A progress bar is shown during the download.
+
+## Storage Location
+
+By default the dataset is stored under the XDG cache directory:
+
+```
+~/.cache/bricksim/bricksim_dataset
+```
+
+To store it elsewhere, set the `BRICKSIM_DATASET_PATH` environment variable before importing `bricksim.structures`:
+
+```bash
+export BRICKSIM_DATASET_PATH=/data/bricksim_dataset
+```
+
+If `XDG_CACHE_HOME` is set, BrickSim respects it and places the dataset under `$XDG_CACHE_HOME/bricksim/bricksim_dataset` instead.
+
+## Accessing a Previously Loaded Dataset
+
+Once `load_bricksim_dataset()` has been called in the current process, you can retrieve the in-memory catalog synchronously from anywhere in your code using `get_bricksim_dataset()`:
+
+```python
+from bricksim.structures import get_bricksim_dataset
+
+dataset = get_bricksim_dataset()
+item = dataset["my_model_id"]
+print(item.caption, item.num_bricks)
+```
+
+Calling `get_bricksim_dataset()` before `load_bricksim_dataset()` raises a `RuntimeError`. Load the dataset once at application startup, then use the synchronous accessor everywhere else.
+
+## Filtering by Stability
+
+The `stable_with_plate` and `num_bricks` fields make it straightforward to build filtered subsets for experiments or curriculum design:
+
+```python
+from bricksim.structures import get_bricksim_dataset
+
+dataset = get_bricksim_dataset()
+stable_models = {
+    mid: item
+    for mid, item in dataset.items()
+    if item.stable_with_plate and item.num_bricks >= 5
+}
+print(f"{len(stable_models)} stable models with 5+ bricks")
+```
+
+You can combine additional predicates — for example, restricting to a particular `category` or capping `max_stability_score_with_plate` below a threshold — to create tightly scoped evaluation splits.
+
+## Loading a Structure into BrickSim
+
+Each `BricksimDatasetItem` carries a `json_path` pointing to the topology JSON on disk. Pass it to `import_lego()` to instantiate the structure in an active Isaac Sim stage:
+
+```python
+import json
+from bricksim.structures import get_bricksim_dataset
+from bricksim.core import import_lego
+
+dataset = get_bricksim_dataset()
+item = dataset["my_model_id"]
+
+with open(item.json_path) as f:
+    topology = json.load(f)
+
+part_paths, conn_paths = import_lego(json=topology, env_id=-1)
+```
+
+`import_lego` returns two lists: `part_paths` contains the USD prim paths for each individual brick, and `conn_paths` contains the prim paths for the inter-brick connection constraints. Pass `env_id=-1` to use the default singleton environment.
+
+<Note>
+  `is_bricksim_dataset_available()` returns `True` if the dataset catalog JSON exists on disk, without triggering a download. Use it as a lightweight pre-flight check before calling `get_bricksim_dataset()` in environments where network access may be unavailable.
+</Note>

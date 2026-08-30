@@ -1,0 +1,124 @@
+---
+title: "ToDeviceWrapper: Move Environment Outputs to a Torch Device"
+sidebarTitle: "ToDeviceWrapper"
+description: "API reference for bricksim.envs.wrappers.ToDeviceWrapper — a Gymnasium wrapper that moves observations, rewards, and info dicts to a target torch device."
+---
+
+`ToDeviceWrapper` is a Gymnasium environment wrapper that transparently moves all outputs — observations, rewards, termination flags, truncation flags, and info dictionaries — to a specified `torch.device` on every call to `step` and `reset`. It wraps any `gymnasium.Env` instance and requires no changes to the underlying environment or training loop.
+
+---
+
+## Class definition
+
+```python
+from bricksim.envs.wrappers import ToDeviceWrapper
+
+class ToDeviceWrapper(Wrapper[ObsT, ActT, ObsT, ActT]):
+    def __init__(self, env: Env, device: str | torch.device) -> None: ...
+    def step(self, action) -> tuple[obs, reward, terminated, truncated, info]: ...
+    def reset(self, *, seed=None, options=None) -> tuple[obs, info]: ...
+    def render(self) -> RenderFrame | list[RenderFrame] | None: ...
+```
+
+---
+
+## Constructor
+
+<ParamField name="env" type="gymnasium.Env" required>
+  The environment to wrap. Compatible with any `gymnasium.Env`, including `ManagerBasedRLEnv` from Isaac Lab.
+</ParamField>
+
+<ParamField name="device" type="str | torch.device" required>
+  Destination device for all tensor outputs. Accepts anything accepted by `torch.device`, such as `"cpu"`, `"cuda:0"`, or a `torch.device` object. The value is stored as a `torch.device` on `self.device`.
+</ParamField>
+
+---
+
+## Methods
+
+### `step`
+
+```python
+def step(self, action) -> tuple[obs, reward, terminated, truncated, info]
+```
+
+Steps the wrapped environment with the given action, then recursively moves every tensor in the returned tuple to the target device.
+
+<ParamField name="action" type="ActT" required>
+  Action to pass through to the inner `env.step`. The wrapper does **not** move the action to a different device before passing it; callers are responsible for sending actions to the correct device upstream.
+</ParamField>
+
+**Returns** the standard Gymnasium `(obs, reward, terminated, truncated, info)` 5-tuple with all tensors on the configured device.
+
+---
+
+### `reset`
+
+```python
+def reset(self, *, seed=None, options=None) -> tuple[obs, info]
+```
+
+Resets the wrapped environment and moves the resulting observations and info dict to the target device.
+
+<ParamField name="seed" type="int | None" default="None">
+  Optional RNG seed forwarded verbatim to the inner environment.
+</ParamField>
+
+<ParamField name="options" type="dict[str, object] | None" default="None">
+  Optional reset options forwarded verbatim to the inner environment.
+</ParamField>
+
+**Returns** `(obs, info)` with all tensors on the configured device.
+
+---
+
+### `render`
+
+```python
+def render(self) -> RenderFrame | list[RenderFrame] | None
+```
+
+Calls `env.render()` and moves the result to the target device using `accelerate.utils.send_to_device`. Returns `None` if the inner environment returns `None`.
+
+---
+
+## Device transfer internals
+
+Internally, `ToDeviceWrapper` delegates all data movement to `accelerate.utils.send_to_device`. This utility performs a recursive traversal of arbitrary Python structures — nested dicts, lists, tuples, and `torch.Tensor` objects — and calls `.to(device)` on every tensor it encounters. Non-tensor leaves (strings, ints, `None`) are passed through unchanged.
+
+<Note>
+  `ToDeviceWrapper` is particularly useful when BrickSim's physics simulation runs on the CPU (the default, since `AssembleBrickBaseEnvCfg` sets `sim.device = "cpu"`) while the training loop and neural network run on a GPU. Wrapping the environment means training code never needs to manually move tensors.
+</Note>
+
+---
+
+## Usage example
+
+```python
+from bricksim.envs.wrappers import ToDeviceWrapper
+from isaaclab.envs import ManagerBasedRLEnv
+from bricksim.envs.assemble_brick.env import AssembleBrickEnvCfg
+
+# Create the base environment (runs physics on CPU)
+env_cfg = AssembleBrickEnvCfg()
+env_cfg.scene.num_envs = 4
+env = ManagerBasedRLEnv(cfg=env_cfg)
+
+# Wrap to auto-move outputs to the training GPU
+env = ToDeviceWrapper(env, device="cuda:0")
+
+obs, info = env.reset()
+# obs tensors are now on cuda:0
+
+actions = policy(obs)  # policy lives on cuda:0
+obs, reward, terminated, truncated, info = env.step(actions)
+# reward, terminated, truncated, and info tensors also on cuda:0
+```
+
+<Tip>
+  Stack `ToDeviceWrapper` as the outermost wrapper. Other wrappers (e.g. frame-stacking or observation normalisation) should be applied to the inner `ManagerBasedRLEnv` first so that all intermediate tensors remain on the CPU until the final `ToDeviceWrapper` moves them in one pass.
+</Tip>
+
+<Warning>
+  Actions passed to `env.step()` are forwarded as-is without a device cast. If your policy produces actions on `cuda:0`, confirm that the inner Isaac Lab environment can accept GPU tensors for the action buffer, or explicitly move actions to CPU before calling `step`.
+</Warning>

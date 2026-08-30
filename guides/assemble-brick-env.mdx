@@ -1,0 +1,198 @@
+---
+title: "AssembleBrick: Isaac Lab RL Environment for Brick Assembly"
+sidebarTitle: "AssembleBrick Env"
+description: "Configure and use the AssembleBrick Isaac Lab RL environment — observation modes, reward terms, termination conditions, and scene setup."
+---
+
+`AssembleBrickEnv` is a manager-based Isaac Lab RL environment for training agents to pick up a single LEGO brick from a randomised table position and press it onto a sampled target location on a fixed 32×32 baseplate. The environment family supports three observation modes — pure state, RGB cameras, and RGB-D cameras — so the same task can be used for both classical policy learning and image-based approaches.
+
+## Environment Variants
+
+Three configuration classes are available, all inheriting from a common base (`AssembleBrickBaseEnvCfg`):
+
+<Tabs>
+  <Tab title="State-based">
+    `AssembleBrickEnvCfg` disables all cameras and the image observation group, keeping overhead minimal. This is the recommended starting point for initial policy development.
+
+    - No cameras spawned
+    - `images` observation group set to `None`
+    - `num_rerenders_on_reset` set to `0`
+
+    ```python
+    from bricksim.envs.assemble_brick.env import AssembleBrickEnvCfg
+    ```
+  </Tab>
+  <Tab title="RGB">
+    `AssembleBrickRGBEnvCfg` retains all three D435 cameras but strips depth data types, returning only RGB images from each sensor.
+
+    - Three D435 cameras active (hand, front, side)
+    - `data_types` limited to `["rgb"]` for each camera
+    - `hand_depth`, `front_depth`, `side_depth` observation terms set to `None`
+
+    ```python
+    from bricksim.envs.assemble_brick.env import AssembleBrickRGBEnvCfg
+    ```
+  </Tab>
+  <Tab title="RGB-D">
+    `AssembleBrickRGBDEnvCfg` is the full configuration: all three D435 cameras stream both RGB and `distance_to_image_plane` depth, giving six camera observation terms in total.
+
+    - Three D435 cameras active (hand, front, side)
+    - `data_types` set to `["rgb", "distance_to_image_plane"]` for each camera
+    - All six camera observation terms active
+
+    ```python
+    from bricksim.envs.assemble_brick.env import AssembleBrickRGBDEnvCfg
+    ```
+  </Tab>
+</Tabs>
+
+### Instantiation example
+
+```python
+from isaaclab.envs import ManagerBasedRLEnv
+from bricksim.envs.assemble_brick.env import AssembleBrickEnvCfg
+
+env_cfg = AssembleBrickEnvCfg()
+env_cfg.scene.num_envs = 4
+env = ManagerBasedRLEnv(cfg=env_cfg)
+obs, _ = env.reset()
+```
+
+## Scene Configuration
+
+Each parallel environment contains the following assets:
+
+| Asset | Type | Details |
+|---|---|---|
+| **FR3 robot** | `ArticulationCfg` | Franka Research 3 arm with implicit PD actuators; finger effort limit 15 N |
+| **Hand camera** | `TiledCameraCfg` | Intel RealSense D435 mounted on `fr3_hand`; 1280×720, clipping 1 mm – 3 m |
+| **Front camera** | `TiledCameraCfg` | D435 at pose `(0.5, −0.72, 0.42)` facing the workspace |
+| **Side camera** | `TiledCameraCfg` | D435 at pose `(1.08, 0.16, 0.42)` facing the workspace from the side |
+| **Seattle Lab Table** | `AssetBaseCfg` | Isaac Nucleus `SeattleLabTable/table_instanceable.usd` |
+| **LEGO baseplate** | `RigidObjectCfg` | 32×32×1 Dark Gray plate, kinematic (does not move) |
+| **LEGO brick** | `RigidObjectCfg` | 2×4×3 Pink brick, non-kinematic; position randomised on every reset |
+
+The end-effector frame transformer (`ee_frame`) tracks three points: the TCP pad-center (`end_effector`, offset `+103.4 mm` along `fr3_hand` Z), the right fingertip (`tool_rightfinger`), and the left fingertip (`tool_leftfinger`).
+
+## Observation Groups
+
+The environment exposes three named observation groups.
+
+### `policy` — concatenated flat vector
+
+These terms are concatenated into a single tensor and form the default policy input:
+
+| Term | Shape | Description |
+|---|---|---|
+| `ee_frame_pose` | `(7,)` | End-effector position (m) + quaternion (WXYZ) in robot base frame |
+| `gripper_width` | `(1,)` | Sum of finger joint positions in metres |
+| `gripper_speed` | `(1,)` | Maximum absolute finger joint velocity (m/s) |
+| `brick_pose` | `(7,)` | Brick root position (m) + quaternion (WXYZ) in robot base frame |
+| `target_pose` | `(7,)` | Commanded target position (m) + quaternion (WXYZ) in robot base frame |
+
+### `privileged` — non-concatenated dict
+
+Extends `policy` with three additional terms. `concatenate_terms = False`, so each entry is returned as a separate tensor under its key name.
+
+| Term | Shape | Description |
+|---|---|---|
+| *(all `policy` terms)* | — | See above |
+| `brick_grasped` | `(1,)` | Boolean: brick is within grasp distance of the end-effector |
+| `connection_created` | `(1,)` | Boolean: commanded interface pair is currently connected |
+| `brick_dimensions` | `(3,)` | Brick `(L, W, H)` in stud/plate units as a long tensor |
+
+### `images` — non-concatenated dict
+
+Only present in RGB and RGB-D variants. `concatenate_terms = False`.
+
+| Term | Dtype | Description |
+|---|---|---|
+| `hand_color` | `uint8 (H, W, 3)` | RGB from hand-mounted D435 |
+| `hand_depth` | `float32 (H, W, 1)` | Distance to image plane from hand camera (m) |
+| `front_color` | `uint8 (H, W, 3)` | RGB from front D435 |
+| `front_depth` | `float32 (H, W, 1)` | Distance to image plane from front camera (m) |
+| `side_color` | `uint8 (H, W, 3)` | RGB from side D435 |
+| `side_depth` | `float32 (H, W, 1)` | Distance to image plane from side camera (m) |
+
+<Note>
+  Depth terms are `None` (absent from the dict) in the RGB variant (`AssembleBrickRGBEnvCfg`).
+</Note>
+
+## Action Space
+
+Each environment step accepts an action tensor of shape `(num_envs, 7)`:
+
+| Term | Dims | Type | Details |
+|---|---|---|---|
+| `arm_action` | 0 – 5 | `DifferentialInverseKinematicsAction` | Relative pose command on FR3 joints 1–7 via DLS IK; body `fr3_hand`; scale `(0.2, 0.2, 0.2, 1.0, 1.0, 1.0)` |
+| `gripper_action` | 6 | `HysteresisBinaryJointAction` | Binary open/close on `fr3_finger_joint.*`; open at 0.04 m, close at 0.0 m; opens when action > +0.2, closes when action < −0.2 |
+
+Actions should be clipped to `[−1, 1]` before calling `env.step()`.
+
+## Reward Terms
+
+| Term | Weight | Description |
+|---|---|---|
+| `reach_brick` | **5.0** | `1 − tanh(d / 0.25)` where `d` is the Euclidean distance from end-effector to brick |
+| `grasp_bonus` | **2.0** | One-shot bonus: 1.0 when the brick is within grasp distance of the end-effector |
+| `lift_bonus` | **2.0** | One-shot bonus: 1.0 when the brick is lifted more than 3 cm above the target Z |
+| `transport_xy` | **4.0** | Grasp-gated: `1 − tanh(xy_dist / 0.04)` for XY distance from brick to target |
+| `yaw_align` | **2.0** | Grasp-gated: `1 − tanh(rot_err / 0.20)` for yaw alignment of brick to target |
+| `pre_insert_height` | **3.0** | Active when XY error < 3 cm and yaw error < 0.25 rad; `1 − tanh(z_err / 0.01)` for height |
+| `insert_z` | **4.0** | Active when XY error < 1.2 cm and yaw error < 0.12 rad; `1 − tanh(z_err / 0.006)` for Z |
+| `success_bonus` | **1000.0** | Sparse: target connection formed **and** gripper open |
+| `action_rate` | **−1e-5** | L2 penalty on the action rate (change between steps) |
+| `joint_vel` | **−1e-5** | L2 penalty on joint velocities |
+
+## Termination Conditions
+
+| Term | Condition |
+|---|---|
+| `timeout` | Episode length exceeded (`episode_length_s = 12.0 s`) |
+| `success` | Target connection formed **and** gripper is open |
+| `wrong_connection` | A connection between the configured interface pair is formed at a non-target placement |
+| `brick_dropped` | Brick root height falls below −2 cm in world frame |
+
+## Episode and Sim Settings
+
+These values are set in `AssembleBrickBaseEnvCfg.__post_init__` and apply to all variants unless overridden:
+
+| Parameter | Value | Notes |
+|---|---|---|
+| `episode_length_s` | `12.0` s | Maximum episode duration |
+| `sim.dt` | `1/60` s | Physics step size |
+| `decimation` | `6` | Policy runs at 10 Hz (every 6 physics steps) |
+| `num_rerenders_on_reset` | `3` | Extra render passes after reset (0 for state-based) |
+| `sim.device` | `"cpu"` | PhysX runs on CPU for deterministic brick contact |
+| `sim.use_fabric` | `False` | Required for BrickSim connection detection |
+
+## Assembly and Breakage Thresholds
+
+`__post_init__` automatically calls both threshold configurators with sensible defaults:
+
+```python
+configure_assembly_thresholds(enabled=True)
+configure_breakage_thresholds(enabled=False)
+```
+
+Assembly detection is **enabled** (bricks snap when force and alignment conditions are met) and breakage is **disabled** (connections cannot be broken by force). To override, subclass the config and call the helpers again after `super().__post_init__()`:
+
+```python
+from isaaclab.utils import configclass
+from bricksim.mdp.connection_thresholds import (
+    configure_assembly_thresholds,
+    configure_breakage_thresholds,
+)
+from bricksim.envs.assemble_brick.env import AssembleBrickEnvCfg
+
+@configclass
+class MyEnvCfg(AssembleBrickEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        # Enable breakage so connections can be pulled apart
+        configure_breakage_thresholds(enabled=True)
+```
+
+<Tip>
+  For data collection with the expert policy, start with `AssembleBrickEnvCfg` (state-based) to iterate quickly, then switch to `AssembleBrickRGBDEnvCfg` once the policy is working well.
+</Tip>

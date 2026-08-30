@@ -1,0 +1,155 @@
+---
+title: "Physics Engine: Isaac Sim PhysX Integration"
+sidebarTitle: "Physics Engine"
+description: "How BrickSim runs on NVIDIA PhysX via Isaac Sim, manages brick rigid bodies, joint constraints, and synchronizes with the USD scene graph."
+---
+
+BrickSim uses Isaac Sim's PhysX backend — accessed through the Omniverse physics pipeline — as the underlying rigid-body simulator for all brick parts. Every LEGO brick becomes a PhysX dynamic actor with procedurally generated collision geometry, and every stud–hole connection is realised as a PhysX weld joint. This page explains how bricks are represented in PhysX, how the USD scene graph stays in sync, and which APIs give you visibility into simulation performance.
+
+## Brick Rigid Bodies
+
+Each brick part is spawned as a USD `RigidBody` prim. The geometry is authored from first principles: body volume, stud cylinders on the top face, and anti-stud cavities on the bottom face are all computed from the brick's `(L, W, H)` dimensions using the geometry constants defined in `bricksim.core.specs`:
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `BrickUnitLength` | 8.0 mm | Stud pitch in XY |
+| `PlateUnitHeight` | 3.2 mm | Plate height in Z |
+| `BrickHeightPerPlate` | 3 | Plates per standard brick layer |
+| `StudDiameter` | 4.8 mm | Stud cylinder diameter |
+| `StudHeight` | 1.7 mm | Stud protrusion above brick body |
+
+Mass and inertia are derived analytically. For a `BrickPart(L, W, H)`:
+
+```
+mass   = brick_mass_in_kg(L, W, H)          # from bricksim.core.mass
+I_xx   = (1/12) * m * (ly² + lz²)
+I_yy   = (1/12) * m * (lx² + lz²)
+I_zz   = (1/12) * m * (lx² + ly²)
+
+where lx = L * 0.008, ly = W * 0.008, lz = H * 0.0032
+```
+
+The centre of mass is located at `(0, 0, H * PlateUnitHeight / 2)` — the geometric centre of the brick body, excluding studs.
+
+Physics material properties such as friction coefficients and restitution can be applied through standard Isaac Sim USD physics APIs by targeting the prim path returned by `allocate_brick_part()` or `import_lego()`.
+
+---
+
+## Connection Constraints
+
+When the assembly detector fires (see [Connection Model](/concepts/connection-model) for threshold details), BrickSim creates a rigid weld joint between the two connected parts by calling `create_connection()`. Internally this:
+
+1. Computes the world transform at which the stud and hole interfaces align using `compute_connection_transform()`.
+2. Authors a USD joint prim under the active stage.
+3. Registers the joint in the PhysX scene through the USD–PhysX bridge so it takes effect on the next simulation step.
+
+You can create connections programmatically without relying on the automatic detector:
+
+```python
+from bricksim.core import create_connection
+
+conn_path = create_connection(
+    stud_path="/World/Env_0/Baseplate",
+    stud_if=1,           # StudId = 1 (top face)
+    hole_path="/World/Env_0/Brick",
+    hole_if=0,           # HoleId = 0 (bottom face)
+    offset=(0, 0),       # centred alignment, in stud units
+    yaw=0,               # no rotation
+)
+# conn_path: "/World/Conn_0"
+```
+
+To remove a connection and restore the parts to independent rigid bodies:
+
+```python
+from bricksim.core import deallocate_connection
+
+deallocate_connection(conn_path)
+```
+
+The constraint scheduler batches joint creation and removal so that multiple connections formed in the same physics step are processed atomically. This avoids PhysX solver instabilities that can occur when constraints are added mid-step.
+
+---
+
+## USD–Physics Synchronisation
+
+BrickSim maintains two parallel representations of the brick world: the USD scene graph (authoritative for rendering and serialisation) and the PhysX simulation graph (authoritative for dynamics). The `set_sync_to_usd()` toggle controls whether PhysX state is written back to USD every step:
+
+```python
+from bricksim.core import set_sync_to_usd, get_sync_to_usd
+
+# Enable: USD prim transforms are updated every physics step (needed for rendering)
+set_sync_to_usd(True)
+
+# Disable: USD transforms are not updated (faster for headless RL training)
+set_sync_to_usd(False)
+
+current = get_sync_to_usd()  # -> False
+```
+
+<Warning>
+  Disabling USD sync while a camera sensor is active will cause the rendered frames to show bricks at their initial spawn positions rather than their current physics positions. Always enable sync before calling `env.render()` or exporting a topology snapshot with `export_lego()`.
+</Warning>
+
+The `AssembleBrickBaseEnvCfg.__post_init__` sets `use_fabric=False`, which means Isaac Sim's Fabric (RTXDI) fast-path is disabled. All state reads go through the standard USD and PhysX query APIs, which is required for BrickSim's connection detection to have access to per-step contact and force data.
+
+---
+
+## Physics Step Profiling
+
+BrickSim exposes lightweight per-step timing data through `get_last_step_profiling()`, which returns a `PhysicsStepProfiling` object:
+
+```python
+from bricksim.core import get_last_step_profiling
+
+profiling = get_last_step_profiling()
+print(profiling)
+# PhysicsStepProfiling(sim_time=1024, step_time=2.341 ms)
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `sim_time` | `int` | Simulation tick counter (integer step index) |
+| `step_time` | `float` | Wall-clock time of the last physics step in seconds |
+
+Use `step_time` to detect performance regressions when adding new constraints or increasing the number of parallel environments. For reference, the default `AssembleBrickEnvCfg` targets a 1/60 s physics step (≈ 16.7 ms budget per step).
+
+---
+
+## Simulation Configuration
+
+The default simulation parameters used by `AssembleBrickBaseEnvCfg` are set in `__post_init__`:
+
+| Parameter | Value | Effect |
+|---|---|---|
+| `sim.dt` | `1/60 s` ≈ 16.7 ms | Physics step duration |
+| `decimation` | `6` | Policy steps every 6 physics steps → 100 ms per policy step |
+| `sim.use_fabric` | `False` | Disables Isaac Fabric; forces standard USD/PhysX path |
+| `sim.device` | `"cpu"` | Runs PhysX on CPU (required for deterministic contact queries) |
+| `episode_length_s` | `12.0 s` | Maximum episode duration |
+| `sim.render_interval` | `6` | Matches `decimation`; render every 6 physics steps |
+
+The 6× decimation ratio means the policy sees a new observation and issues an action every 100 ms of simulated time, while the physics solver runs at the full 60 Hz for accurate contact resolution between the gripper fingers and brick geometry.
+
+---
+
+## ID Mappings
+
+BrickSim maintains two independent ID spaces: USD IDs (integer keys into the USD scene graph) and PhysX IDs (integer keys into the PhysX simulation graph). The bridge between them is the USD–PhysX part and connection mapping. Two helper functions expose these mappings for debugging or custom tooling:
+
+```python
+from bricksim.core import get_usd_id_mappings, get_physx_id_mappings
+
+# USD-space mappings: prim path -> internal USD integer ID
+usd_parts, usd_conns = get_usd_id_mappings()
+# e.g. {"/World/Env_0/Brick": 3, "/World/Env_0/Baseplate": 2}
+
+# PhysX-space mappings: prim path -> PhysX actor/joint ID
+physx_parts, physx_conns = get_physx_id_mappings()
+```
+
+Both functions return `(part_mapping, connection_mapping)` tuples. The PhysX mappings are only valid after the physics scene has been created (i.e., after the first simulation step). Calling `get_physx_id_mappings()` before the bridge is initialised raises a `RuntimeError`.
+
+<Note>
+  For robot articulations (e.g. the FR3 arm), increasing `physxArticulation:solverPositionIterationCount` to `64` on the articulation root prim significantly improves assembly stability. At the default count of `4`, the solver may allow small penetrations between gripper fingers and brick geometry that can cause spurious assembly events or missed detections under high contact forces.
+</Note>

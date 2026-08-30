@@ -1,0 +1,159 @@
+---
+title: "AssembleBrick Expert Policy Rollout and Data Collection"
+sidebarTitle: "Expert Policy"
+description: "Run the built-in expert policy for the AssembleBrick environment to collect demonstration data, capture camera images, and benchmark success rates."
+---
+
+BrickSim ships an `AssembleBrickExpert` — a hand-crafted, memory-less scripted policy that solves the brick assembly task deterministically across any number of parallel environments. It is useful for generating clean demonstration datasets, verifying environment correctness, and establishing baseline success-rate benchmarks before training a learned policy. The expert is exposed both as a command-line tool (`bricksim-assemble-brick-expert`) and as a Python class you can import directly into your own scripts.
+
+## CLI Usage
+
+The `bricksim-assemble-brick-expert` command is installed as an entry point when you `uv sync` or install the package. Run it from the repository root (or any activated environment):
+
+```bash
+bricksim-assemble-brick-expert [OPTIONS] [ISAAC_LAB_APP_ARGS]
+```
+
+<Note>
+  Passing `--obs-mode rgb` or `--obs-mode rgbd` automatically sets `--enable-cameras` for the Isaac Sim app launcher. You do not need to pass this flag manually.
+</Note>
+
+### Flags
+
+| Flag | Type | Default | Description |
+|---|---|---|---|
+| `--num_envs INT` | int | `1` | Number of parallel environments to simulate |
+| `--seed INT` | int | `None` | Optional random seed for environment resets |
+| `--goals "x,y,yaw;..."` | str | `None` | Semicolon-separated goal rows; if omitted, all valid connection placements are sampled |
+| `--obs-mode {state,rgb,rgbd}` | choice | `state` | Observation mode: `state` (no cameras), `rgb` (three D435 cameras, RGB only), or `rgbd` (three D435 cameras, RGB + depth) |
+| `--save-camera-dir PATH` | path | `None` | Directory where camera images are written; created automatically |
+| `--save-camera-every INT` | int | `30` | Save one camera frame every N environment steps |
+| `--show-camera` | flag | off | Display camera images live using OpenCV |
+| `--show-goals` | flag | off | Enable the assembly goal marker visualiser in the viewport |
+
+Any additional arguments are forwarded to Isaac Lab's `AppLauncher` (e.g. `--headless`, `--enable_cameras`).
+
+### Example commands
+
+```bash
+# State-based rollout across 4 parallel environments
+bricksim-assemble-brick-expert --num_envs 4 --obs-mode state
+
+# RGB-D rollout, save camera images every 10 steps
+bricksim-assemble-brick-expert --obs-mode rgbd \
+    --save-camera-dir ./camera_data \
+    --save-camera-every 10
+
+# Fix the seed and run headlessly for reproducible benchmarking
+bricksim-assemble-brick-expert --num_envs 8 --seed 42 --headless
+
+# Evaluate on two specific goals only
+bricksim-assemble-brick-expert --goals "0,0,0;1,0,1"
+
+# Show live camera feed while running
+bricksim-assemble-brick-expert --obs-mode rgb --show-camera --show-goals
+```
+
+## Programmatic Usage
+
+`AssembleBrickExpert` is a plain Python class with no Isaac Lab dependencies in its constructor. It accepts the non-concatenated `"privileged"` observation dict and returns a batched action tensor.
+
+```python
+from isaaclab.envs import ManagerBasedRLEnv
+from bricksim.envs.assemble_brick.env import AssembleBrickEnvCfg
+from bricksim.envs.assemble_brick.expert import AssembleBrickExpert
+
+env_cfg = AssembleBrickEnvCfg()
+env_cfg.scene.num_envs = 4
+env = ManagerBasedRLEnv(cfg=env_cfg)
+expert = AssembleBrickExpert()
+
+obs, _ = env.reset()
+while True:
+    privileged_obs = obs["privileged"]   # dict[str, torch.Tensor]
+    actions = expert.compute_actions(privileged_obs)
+    obs, rewards, terminated, truncated, _ = env.step(actions)
+```
+
+### `compute_actions` input and output
+
+| Parameter | Type | Description |
+|---|---|---|
+| `obs` | `dict[str, torch.Tensor]` | Non-concatenated `observations["privileged"]` dict from `env.step` or `env.reset` |
+
+The method requires the following keys to be present in `obs`:
+
+| Key | Shape | Description |
+|---|---|---|
+| `ee_frame_pose` | `(N, 7)` | End-effector position + WXYZ quaternion in robot base frame |
+| `gripper_width` | `(N, 1)` | Sum of finger joint positions (m) |
+| `gripper_speed` | `(N, 1)` | Maximum absolute finger joint velocity (m/s) |
+| `brick_pose` | `(N, 7)` | Brick root position + WXYZ quaternion in robot base frame |
+| `target_pose` | `(N, 7)` | Commanded target position + WXYZ quaternion in robot base frame |
+| `brick_dimensions` | `(N, 3)` | Brick `(L, W, H)` in stud/plate units |
+| `brick_grasped` | `(N,)` or `(N, 1)` | Boolean grasp signal |
+| `connection_created` | `(N,)` or `(N, 1)` | Boolean connection signal |
+
+**Returns:** `torch.Tensor` of shape `(N, 7)`. The first six values are relative IK pose commands scaled to `[−1, 1]`; the seventh is the binary gripper command (`−1` = close, `+1` = open).
+
+### Expert behaviour summary
+
+The expert implements a six-phase finite-state machine (evaluated per-environment, per-step via vectorised masks):
+
+<Steps>
+  <Step title="Open gripper">
+    Widen the gripper to `grasp_width + 1.5 cm` (clamped to the 8 cm maximum) before approaching the brick.
+  </Step>
+  <Step title="Move to pre-grasp pose">
+    Translate the end-effector to 10 cm above the brick along the brick's Z-axis, oriented for a top-down grasp across the shorter edge.
+  </Step>
+  <Step title="Descend to grasp pose">
+    Move to the computed grasp pose (5 mm into the brick top surface) and close the gripper.
+  </Step>
+  <Step title="Lift and transport">
+    Raise the brick to transport height (target Z + brick height + TCP offset + lift margin), then move laterally towards the target XY.
+  </Step>
+  <Step title="Pre-insertion alignment">
+    Approach to 4 cm above the insertion pose while aligning yaw and XY to within tolerance.
+  </Step>
+  <Step title="Press and release">
+    Descend 3 mm past the target insertion height to trigger BrickSim's snap detection, then open the gripper.
+  </Step>
+</Steps>
+
+## Camera Output Format
+
+When `--save-camera-dir` is specified and `--obs-mode` is `rgb` or `rgbd`, images are saved after every `--save-camera-every` steps (default: every 30 steps). Only environment 0 is saved.
+
+### RGB images
+
+- **Format:** PNG (lossless)
+- **Dtype:** `uint8`
+- **Shape:** `H × W × 3`
+- **Filename pattern:** `step_{step:06d}_{obs_name}.png`
+
+Example: `step_000030_hand_color.png`, `step_000030_front_color.png`
+
+### Depth maps
+
+- **Format:** NumPy compressed NPZ
+- **Key inside file:** `image`
+- **Dtype:** `float32`
+- **Shape:** `H × W` (single channel)
+- **Units:** metres (distance to image plane)
+- **Filename pattern:** `step_{step:06d}_{obs_name}.npz`
+
+Example: `step_000030_hand_depth.npz`, `step_000030_front_depth.npz`
+
+Load a saved depth map:
+
+```python
+import numpy as np
+
+data = np.load("camera_data/step_000030_hand_depth.npz")
+depth = data["image"]   # float32 array, shape (720, 1280), values in metres
+```
+
+<Tip>
+  To visualise depth inline, use `--show-camera`. The live display normalises depth to the 0th–95th percentile range and applies the OpenCV `TURBO` colormap for easy inspection.
+</Tip>

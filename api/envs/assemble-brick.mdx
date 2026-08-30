@@ -1,0 +1,298 @@
+---
+title: "AssembleBrickEnvCfg: Isaac Lab RL Environment Configuration"
+sidebarTitle: "AssembleBrickEnvCfg"
+description: "API reference for AssembleBrickEnvCfg, AssembleBrickRGBEnvCfg, and AssembleBrickRGBDEnvCfg — the BrickSim Isaac Lab manager-based RL environment configurations."
+---
+
+The `AssembleBrickEnvCfg` family of classes are `@configclass`-decorated configuration objects that fully describe the **assemble-brick** manager-based RL environment. Each class controls the scene layout, observation groups, action and command spaces, reward terms, termination conditions, and simulation parameters. To launch an environment, instantiate one of the concrete variants, customise fields as needed, then pass it to `ManagerBasedRLEnv(cfg=env_cfg)`.
+
+---
+
+## Class hierarchy
+
+BrickSim ships three ready-to-use variants that share a single base:
+
+| Class | Observations | Cameras spawned |
+|---|---|---|
+| `AssembleBrickBaseEnvCfg` | *(do not instantiate directly)* | all cameras present by default |
+| `AssembleBrickEnvCfg` | state-only, no images | none |
+| `AssembleBrickRGBEnvCfg` | state + RGB frames | hand, front, side |
+| `AssembleBrickRGBDEnvCfg` | state + RGB-D frames | hand, front, side |
+
+`AssembleBrickBaseEnvCfg` extends `ManagerBasedRLEnvCfg` from Isaac Lab and must not be instantiated directly — use one of the three concrete subclasses below.
+
+---
+
+## AssembleBrickBaseEnvCfg
+
+```python
+from bricksim.envs.assemble_brick.env import AssembleBrickBaseEnvCfg
+```
+
+Base configuration shared by all assemble-brick variants. Defines the complete scene, MDP components, and simulation parameters. Subclasses modify specific fields in `__post_init__` to opt in or out of camera observations.
+
+### Top-level fields
+
+<ResponseField name="scene" type="SceneCfg">
+  Scene asset configuration. Defaults to `SceneCfg(num_envs=1, env_spacing=5.0)`. See [SceneCfg](#scenecfg) below for the full asset inventory.
+</ResponseField>
+
+<ResponseField name="observations" type="ObservationsCfg">
+  Groups of observation terms exposed to the policy, privileged critic, and (optionally) image sensors. Contains `policy`, `privileged`, and `images` sub-configs.
+</ResponseField>
+
+<ResponseField name="actions" type="ActionsCfg">
+  Action terms for the FR3 arm (differential IK) and gripper (hysteresis binary joint). Callers must clip policy outputs to `[-1, 1]` before calling `env.step()`.
+</ResponseField>
+
+<ResponseField name="commands" type="CommandsCfg">
+  Assembly-goal command sampler. Contains a single `assembly_goal: AssembleBrickCommandCfg` term that samples a new goal on every reset.
+</ResponseField>
+
+<ResponseField name="rewards" type="RewardsCfg">
+  Dense reward shaping terms covering reach, grasp, lift, transport, yaw alignment, pre-insertion height, insertion depth, and a large success bonus.
+</ResponseField>
+
+<ResponseField name="terminations" type="TerminationsCfg">
+  Episode termination conditions: episode timeout, successful assembly (target connection formed with gripper open), wrong connection formed, and brick dropped below a height threshold.
+</ResponseField>
+
+<ResponseField name="events" type="EventCfg">
+  Reset event terms: full scene reset, BrickSim-managed connection clear, FR3 joint-state Gaussian randomisation, and brick pose uniform randomisation.
+</ResponseField>
+
+<ResponseField name="gripper_joint_names" type='list[str]' default='["fr3_finger_joint.*"]'>
+  Regex patterns identifying the gripper joints. Used by the `object_grasped` observation helper from `isaaclab_tasks`.
+</ResponseField>
+
+<ResponseField name="gripper_open_val" type="float" default="0.04">
+  Joint position (in metres) that corresponds to a fully open gripper.
+</ResponseField>
+
+<ResponseField name="gripper_threshold" type="float" default="0.005">
+  Hysteresis band (in metres) used to determine whether the gripper is open.
+</ResponseField>
+
+### `__post_init__` settings
+
+`__post_init__` is called automatically by the `@configclass` decorator after dataclass initialisation. It applies the following defaults shared by all variants:
+
+| Setting | Value |
+|---|---|
+| `sim.device` | `"cpu"` |
+| `sim.use_fabric` | `False` |
+| `decimation` | `6` |
+| `episode_length_s` | `12.0` |
+| `sim.dt` | `1/60` s |
+| `sim.render_interval` | `decimation` (6) |
+| `num_rerenders_on_reset` | `3` |
+
+It also calls:
+- `configure_assembly_thresholds(enabled=True)` — enables snap-together assembly detection.
+- `configure_breakage_thresholds(enabled=False)` — disables connection breakage during training.
+
+<Warning>
+  `sim.device = "cpu"` is intentional. BrickSim's native physics relies on CPU-side collision detection that is not yet ported to CUDA. Use [`ToDeviceWrapper`](/api/envs/wrappers) to move observations and rewards to a GPU after stepping.
+</Warning>
+
+---
+
+## AssembleBrickEnvCfg
+
+```python
+from bricksim.envs.assemble_brick.env import AssembleBrickEnvCfg
+```
+
+State-based variant. `__post_init__` sets all three camera scene entities to `None`, removes the `images` observation group, and sets `num_rerenders_on_reset = 0`. This is the fastest configuration for state-based RL training and imitation learning.
+
+---
+
+## AssembleBrickRGBEnvCfg
+
+```python
+from bricksim.envs.assemble_brick.env import AssembleBrickRGBEnvCfg
+```
+
+RGB-only variant. Retains all three D435 camera models (`hand_camera`, `front_camera`, `side_camera`) but restricts each camera's `data_types` to `["rgb"]` and sets the corresponding depth observation terms (`hand_depth`, `front_depth`, `side_depth`) to `None`.
+
+---
+
+## AssembleBrickRGBDEnvCfg
+
+```python
+from bricksim.envs.assemble_brick.env import AssembleBrickRGBDEnvCfg
+```
+
+Full RGB-D variant. Inherits `AssembleBrickBaseEnvCfg` without modification. All three cameras stream both `"rgb"` and `"distance_to_image_plane"` data at 1280×720 resolution using RealSense D435 intrinsics.
+
+---
+
+## SceneCfg
+
+`SceneCfg` extends Isaac Lab's `InteractiveSceneCfg`. The following scene entities are defined:
+
+<ResponseField name="robot" type="ArticulationCfg">
+  Franka Research 3 (FR3) arm loaded from `bricksim.assets.robots.fr3`. Initial joint positions place the arm above the table in a neutral pose. The `fr3_hand` actuator group sets `effort_limit_sim=15.0`.
+</ResponseField>
+
+<ResponseField name="ee_frame" type="FrameTransformerCfg">
+  Tracks three frames relative to `fr3_link0`: `end_effector` (TCP at `[0, 0, 0.1034]` m from `fr3_hand`), `tool_rightfinger`, and `tool_leftfinger`.
+</ResponseField>
+
+<ResponseField name="hand_camera" type="TiledCameraCfg | None">
+  RealSense D435 mounted on the hand (`fr3_hand → D435`). Resolution 1280×720. Set to `None` in `AssembleBrickEnvCfg`.
+</ResponseField>
+
+<ResponseField name="front_camera_model" type="RigidObjectCfg">
+  Kinematic rigid body housing the front D435, positioned at `(0.5, -0.72, 0.42)` m with gravity disabled.
+</ResponseField>
+
+<ResponseField name="side_camera_model" type="RigidObjectCfg">
+  Kinematic rigid body housing the side D435, positioned at `(1.08, 0.16, 0.42)` m with gravity disabled.
+</ResponseField>
+
+<ResponseField name="front_camera" type="TiledCameraCfg | None">
+  Tiled camera attached to the front D435 model. 1280×720, D435 intrinsics. Set to `None` in `AssembleBrickEnvCfg`.
+</ResponseField>
+
+<ResponseField name="side_camera" type="TiledCameraCfg | None">
+  Tiled camera attached to the side D435 model. 1280×720, D435 intrinsics. Set to `None` in `AssembleBrickEnvCfg`.
+</ResponseField>
+
+<ResponseField name="table" type="AssetBaseCfg">
+  Seattle Lab Table from the Isaac Nucleus asset library, positioned at `(0.5, 0, 0.003)` m.
+</ResponseField>
+
+<ResponseField name="ground_plane" type="AssetBaseCfg">
+  Standard Isaac Lab `GroundPlaneCfg` placed at `z = -1.037` m (below the table surface).
+</ResponseField>
+
+<ResponseField name="light" type="AssetBaseCfg">
+  Dome light at full white (`[1, 1, 1]`), intensity 3000.
+</ResponseField>
+
+<ResponseField name="lego_baseplate" type="RigidObjectCfg">
+  32×32×1-stud dark-grey LEGO baseplate at `(0.5, 0.0, 0.0)`. Spawned with `kinematic_enabled=True` so it never moves.
+</ResponseField>
+
+<ResponseField name="lego_brick" type="RigidObjectCfg">
+  2×4×3-stud pink LEGO brick. Non-kinematic (`kinematic_enabled=False`) — gravity and physics apply. Initial position is randomised by the `reset_brick_pose` event.
+</ResponseField>
+
+---
+
+## AssembleBrickCommandCfg
+
+```python
+from bricksim.envs.assemble_brick.mdp.commands import AssembleBrickCommandCfg
+```
+
+Configures the `AssembleBrickCommand` term that samples discrete assembly goals on every environment reset. The goal is defined by a grid offset `(x, y)` and a C4 yaw index, which together specify where the moving brick must be placed relative to the fixed brick.
+
+<ResponseField name="stud_brick" type="str">
+  Scene entity name of the brick providing studs (the fixed / placed brick). Defaults to `"lego_baseplate"` in `CommandsCfg`.
+</ResponseField>
+
+<ResponseField name="stud_brick_iface" type="int" default="1">
+  Interface index on the stud brick used for the connection. Interface `1` is the top face of a standard brick.
+</ResponseField>
+
+<ResponseField name="hole_brick" type="str">
+  Scene entity name of the brick providing holes (the moving brick). Defaults to `"lego_brick"` in `CommandsCfg`.
+</ResponseField>
+
+<ResponseField name="hole_brick_iface" type="int" default="0">
+  Interface index on the hole brick. Interface `0` is the bottom face of a standard brick.
+</ResponseField>
+
+<ResponseField name="moving_brick_type" type='"hole" | "stud"' default='"hole"'>
+  Determines which of the two bricks is the moving one. `"hole"` means the robot must pick up and place the hole brick; `"stud"` reverses this.
+</ResponseField>
+
+<ResponseField name="goal_marker_color" type="str | tuple[int, int, int]">
+  Color of the semi-transparent ghost marker rendered at the goal pose during debug visualisation. Accepts named colors (e.g. `"Red"`) or RGB tuples.
+</ResponseField>
+
+<ResponseField name="debug_vis" type="bool" default="False">
+  When `True`, spawns goal marker prims in the stage and updates their transforms each step.
+</ResponseField>
+
+<ResponseField name="goals" type="torch.Tensor | Sequence[tuple[int, int, int]]" default="()">
+  Pre-defined goal candidates as `(offset_x, offset_y, yaw_index)` rows. An empty sequence causes the command to enumerate **all** geometrically valid connections between the two brick types at initialisation time.
+</ResponseField>
+
+---
+
+## Usage example
+
+```python
+from isaaclab.envs import ManagerBasedRLEnv
+from bricksim.envs.assemble_brick.env import AssembleBrickEnvCfg, AssembleBrickRGBDEnvCfg
+
+# State-based (fastest, no cameras)
+env_cfg = AssembleBrickEnvCfg()
+env_cfg.scene.num_envs = 4
+env = ManagerBasedRLEnv(cfg=env_cfg)
+
+# RGB-D observation
+env_cfg_rgbd = AssembleBrickRGBDEnvCfg()
+env_cfg_rgbd.scene.num_envs = 1
+env_cfg_rgbd.sim.render_interval = 1
+env_rgbd = ManagerBasedRLEnv(cfg=env_cfg_rgbd)
+```
+
+<Tip>
+  When running multiple parallel environments with cameras, set `env_cfg.scene.replicate_physics = False` (already the default in `SceneCfg`) to allow independent physics islands per env.
+</Tip>
+
+---
+
+## AssembleBrickExpert
+
+```python
+from bricksim.envs.assemble_brick.expert import AssembleBrickExpert
+```
+
+A stateless scripted expert policy for the assemble-brick task. It implements the full grasp-lift-transport-insert behaviour using only the current privileged observation. No recurrent state is maintained between calls — all decision logic is derived from the tensors passed to `compute_actions`.
+
+```python
+class AssembleBrickExpert:
+    def __init__(self, arm_action_scale: tuple[float, ...] = ARM_ACTION_SCALE) -> None: ...
+    def compute_actions(self, obs: Mapping[str, torch.Tensor]) -> torch.Tensor: ...
+```
+
+### `compute_actions`
+
+<ParamField name="obs" type="Mapping[str, torch.Tensor]" required>
+  The non-concatenated `observations["privileged"]` dictionary produced by `AssembleBrickBaseEnvCfg.ObservationsCfg.PrivilegedCfg` (which sets `concatenate_terms = False`). Required keys:
+
+  | Key | Shape | Description |
+  |---|---|---|
+  | `ee_frame_pose` | `(N, 7)` | End-effector position `[x,y,z]` + quaternion `[w,x,y,z]` |
+  | `gripper_width` | `(N, 1)` | Current finger-joint sum in metres |
+  | `gripper_speed` | `(N, 1)` | Gripper closing speed |
+  | `brick_pose` | `(N, 7)` | Moving brick position + quaternion |
+  | `target_pose` | `(N, 7)` | Goal target position + quaternion |
+  | `brick_grasped` | `(N, 1)` | Boolean-valued float from contact detection |
+  | `connection_created` | `(N, 1)` | Whether the target connection is formed |
+  | `brick_dimensions` | `(N, 3)` | `[L, W, H]` in stud units |
+</ParamField>
+
+**Returns** `torch.Tensor` — shape `(num_envs, 7)`. The first six values are relative IK pose commands (position and axis-angle rotation, each clipped to `[-1, 1]` after dividing by `ARM_ACTION_SCALE`). The seventh value is the binary gripper command: `+1.0` opens, `-1.0` closes.
+
+```python
+from bricksim.envs.assemble_brick.expert import AssembleBrickExpert
+
+expert = AssembleBrickExpert()
+
+obs, _ = env.reset()
+while True:
+    actions = expert.compute_actions(obs["privileged"])
+    obs, reward, terminated, truncated, info = env.step(actions)
+    if terminated.any() or truncated.any():
+        obs, _ = env.reset()
+```
+
+<Note>
+  The expert relies on the `privileged` observation group having `concatenate_terms = False`. If you use `AssembleBrickEnvCfg` directly, pass `obs["privileged"]` as a dict rather than a concatenated tensor.
+</Note>

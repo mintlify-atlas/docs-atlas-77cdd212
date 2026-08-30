@@ -1,0 +1,181 @@
+---
+title: "BFS Topology Ordering for Assembly Planning"
+sidebarTitle: "Ordering"
+description: "API reference for bricksim.topology.ordering.bfs_sort_connections — breadth-first sorting of topology connections for sequential assembly plan generation."
+---
+
+The `ordering` module provides utilities for post-processing `JsonTopology` documents into a form suitable for sequential robot assembly planning. Its primary function sorts the `connections` list into a breadth-first order rooted at each component's anchor, so that each connection in the output sequence can be physically performed using only parts that have already been placed. The `stabletext2brick` module in the same package offers a complementary text-to-topology converter described at the bottom of this page.
+
+---
+
+## `bfs_sort_connections`
+
+```python
+from bricksim.topology.ordering import bfs_sort_connections
+
+def bfs_sort_connections(topology: JsonTopology) -> JsonTopology
+```
+
+Returns a copy of `topology` with its `connections` list sorted in a breadth-first order suitable for robot assembly planning. The `parts` and `pose_hints` arrays are preserved exactly as-is.
+
+### Algorithm
+
+1. **Graph construction** — the topology's connections are treated as edges in an undirected graph whose nodes are part IDs. Multi-edges between the same pair of parts are supported.
+2. **Connected components** — the graph is decomposed into connected components using a depth-first traversal. Components are processed in a deterministic order (smallest part ID first).
+3. **Root selection** — within each component, if any `pose_hints[i].part` belongs to the component, the smallest such hint-part ID is chosen as the BFS root (the anchor). Otherwise the smallest part ID in the component is used.
+4. **BFS tree edges** — BFS from the root emits one "tree" edge the first time each new neighbour is discovered. When multiple connections exist between the same pair of parts, the first unused one is emitted as the tree edge.
+5. **Remaining edges** — after the BFS tree is complete, any remaining intra-component connections (cross-edges, parallel edges) are appended in a stable sorted order.
+6. **Self-loops** — connections where `stud_id == hole_id` are tracked and appended at the end without participating in BFS.
+
+The result is a stable, deterministic ordering in which every connection that **introduces** a new part appears before any connection between two already-placed parts.
+
+<ParamField name="topology" type="JsonTopology" required>
+  A topology dict conforming to the `bricksim/lego_topology@2` schema. The input is not mutated.
+</ParamField>
+
+**Returns** `JsonTopology` — a shallow copy of `topology` with a reordered `connections` list. If `topology["connections"]` is empty, the original dict is returned unchanged (no copy is made).
+
+<Note>
+  `bfs_sort_connections` does not mutate the input topology. It returns a new dict that shares the same `parts` and `pose_hints` lists but has a freshly constructed `connections` list.
+</Note>
+
+---
+
+## Usage example
+
+```python
+import json
+from bricksim.topology.ordering import bfs_sort_connections
+
+with open("structure.json") as f:
+    topology = json.load(f)
+
+sorted_topology = bfs_sort_connections(topology)
+
+for conn in sorted_topology["connections"]:
+    print(
+        f"Assemble part {conn['hole_id']} onto part {conn['stud_id']} "
+        f"at offset={conn['offset']}, yaw={conn['yaw']}"
+    )
+```
+
+A typical assembly loop in BrickSim iterates over the sorted connections and submits one task per step:
+
+```python
+from bricksim.topology.ordering import bfs_sort_connections
+from bricksim.topology.legolization import legolization_json_to_topology_json, is_legolization_json
+import json
+
+with open("my_structure.json") as f:
+    text = f.read()
+
+if is_legolization_json(text):
+    topology = legolization_json_to_topology_json(json.loads(text))
+else:
+    topology = json.loads(text)
+
+# Sort before feeding to the environment
+topology = bfs_sort_connections(topology)
+
+for step, conn in enumerate(topology["connections"]):
+    stud_part = conn["stud_id"]
+    hole_part = conn["hole_id"]
+    offset    = conn["offset"]   # [x, y] in stud units
+    yaw       = conn["yaw"]      # 0–3 quarter turns
+    print(f"Step {step}: place part {hole_part} on part {stud_part} "
+          f"@ offset {offset}, yaw {yaw * 90}°")
+```
+
+---
+
+## `bricksim.topology.stabletext2brick`
+
+```python
+from bricksim.topology.stabletext2brick import (
+    is_bricks_text,
+    bricks_text_to_topology_json,
+)
+```
+
+The `stabletext2brick` module converts **StableText2Brick** plain-text brick descriptions into `JsonTopology` dicts. StableText2Brick is a compact line-oriented format where each line encodes one brick as `hxw (x,y,z)` — for example `2x6 (13,12,0)`.
+
+### `is_bricks_text`
+
+```python
+def is_bricks_text(text: str) -> bool
+```
+
+Checks the first non-empty line of `text` for the StableText2Brick brick-line format. Returns `True` if it matches `hxw (x,y,z)`.
+
+<ParamField name="text" type="str" required>
+  Raw text to inspect.
+</ParamField>
+
+**Returns** `bool` — `True` if `text` appears to be in StableText2Brick format.
+
+---
+
+### `bricks_text_to_topology_json`
+
+```python
+def bricks_text_to_topology_json(
+    bricks_text: str,
+    color: ColorInput = (255, 255, 255),
+    *,
+    include_base_plate: bool = False,
+    base_plate_size: tuple[int, int] | None = None,
+    base_plate_color: InputColor | None = None,
+) -> JsonTopology
+```
+
+Parses a StableText2Brick string and converts it to a `JsonTopology` dict using the same voxel-grid pipeline as [`legolization_json_to_topology_json`](/api/topology/legolization). Each line is parsed as `hxw (x,y,z)`, producing a brick with `L = h`, `W = w`, `H = 3`.
+
+<ParamField name="bricks_text" type="str" required>
+  StableText2Brick formatted text. Each non-empty line must match the pattern `hxw (x,y,z)`.
+</ParamField>
+
+<ParamField name="color" type="ColorInput" default="(255, 255, 255)">
+  Brick colour(s). A single `(r, g, b)` tuple or a list of per-brick tuples.
+</ParamField>
+
+<ParamField name="include_base_plate" type="bool" default="False">
+  If `True`, inserts an auto-sized base plate as the assembly anchor.
+</ParamField>
+
+<ParamField name="base_plate_size" type="tuple[int, int] | None" default="None">
+  `(width, height)` of the optional base plate in stud units.
+</ParamField>
+
+<ParamField name="base_plate_color" type="InputColor | None" default="None">
+  RGB colour for the base plate.
+</ParamField>
+
+**Returns** `JsonTopology` — a topology dict ready for the BrickSim native importer.
+
+**Raises** `ValueError` if any line cannot be parsed as a valid brick specification.
+
+<Note>
+  For a full description of the StableText2Brick text format, including escape rules and coordinate conventions, see the brick-topology concepts page in the BrickSim documentation.
+</Note>
+
+```python
+from bricksim.topology.stabletext2brick import is_bricks_text, bricks_text_to_topology_json
+from bricksim.topology.ordering import bfs_sort_connections
+
+bricks_text = """\
+2x4 (0,0,0)
+2x4 (0,0,1)
+2x2 (2,0,1)
+"""
+
+if is_bricks_text(bricks_text):
+    topology = bricks_text_to_topology_json(
+        bricks_text,
+        color=(0, 120, 255),
+        include_base_plate=True,
+        base_plate_size=(8, 8),
+        base_plate_color=(80, 80, 80),
+    )
+    topology = bfs_sort_connections(topology)
+    print(f"Assembly plan: {len(topology['connections'])} steps")
+```

@@ -1,0 +1,173 @@
+---
+title: "Install BrickSim from Source or Package Registry"
+sidebarTitle: "Installation"
+description: "Install BrickSim via the nightly Python package registry or clone and build from source, including compiling the C++ native extension with pixi."
+---
+
+BrickSim offers two installation paths. The **package registry** route is the fastest way to get running: a single `uv pip install` command pulls the `bricksim` wheel — including the prebuilt C++ native extension — from the Cloudsmith nightly registry and makes it available in any Python 3.11 environment. The **source** route gives you full control: you clone the repository and either download the prebuilt native `.so` or compile it yourself with `pixi`, which is the only option if you need to modify the C++ physics code in `native/`.
+
+<Warning>
+  Only **x86-64 Linux** is supported at this time. macOS, Windows, and other
+  CPU architectures are not yet available.
+</Warning>
+
+## Install from Package Registry
+
+Install BrickSim directly into a `uv`-managed environment with the following command. The `[all]` extra includes both Isaac Sim and Isaac Lab:
+
+```bash
+uv pip install "bricksim[all]" \
+  --index https://dl.cloudsmith.io/public/bricksim/bricksim/python/simple/ \
+  --override <(printf 'pywin32==306 ; sys_platform == "win32"\n')
+```
+
+To add BrickSim as a dependency in an existing `pyproject.toml`-managed project, first add the `pywin32` override to suppress a spurious Isaac Sim dependency, then run `uv add`:
+
+```toml
+# pyproject.toml
+[tool.uv]
+override-dependencies = [
+  'pywin32==306 ; sys_platform == "win32"',
+]
+```
+
+```bash
+uv add "bricksim[all]" \
+  --index bricksim=https://dl.cloudsmith.io/public/bricksim/bricksim/python/simple/
+```
+
+## Install from Source
+
+<Steps>
+
+  <Step title="Install System Tools">
+    Install the required system utilities with `apt`:
+
+    ```bash
+    sudo apt install git wget unzip
+    ```
+  </Step>
+
+  <Step title="Install uv">
+    BrickSim uses [`uv`](https://docs.astral.sh/uv/getting-started/installation/) for Python package management. Install it if you have not already:
+
+    ```bash
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    ```
+  </Step>
+
+  <Step title="Install pixi (for building native only)">
+    [`pixi`](https://pixi.prefix.dev/latest/installation/) provides the C++ toolchain needed to compile the native extension. You only need it if you plan to build `native/` from source rather than downloading the prebuilt binary.
+
+    ```bash
+    curl -fsSL https://pixi.prefix.dev/install.sh | sh
+    ```
+  </Step>
+
+  <Step title="Clone the Repository">
+    ```bash
+    git clone https://github.com/intelligent-control-lab/BrickSim BrickSim
+    cd BrickSim
+    ```
+  </Step>
+
+  <Step title="Obtain the Native Extension">
+    Choose one of the following options:
+
+    **Option A — Download the prebuilt native extension (recommended)**
+
+    This fetches the compiled `.so` for the current commit from Cloudsmith and places it in `.prebuilt-native/`. The build system picks it up automatically during `uv sync`:
+
+    ```bash
+    ./scripts/download_prebuilt_native.sh
+    ```
+
+    **Option B — Build the native extension from source**
+
+    If you have modified the C++ code in `native/`, or want a debug build, use `pixi` to compile it:
+
+    ```bash
+    pixi run build-native
+    ```
+  </Step>
+
+  <Step title="Sync the Python Environment">
+    Install all Python dependencies and make the `bricksim` package available:
+
+    ```bash
+    uv sync --locked
+    ```
+
+    The `--locked` flag ensures reproducible installs by respecting the checked-in `uv.lock` file.
+  </Step>
+
+</Steps>
+
+## Optional Extras
+
+The `bricksim` package exposes several optional dependency groups. Specify one or more extras inside square brackets when installing:
+
+| Extra | Packages installed | When to use |
+|---|---|---|
+| `isaacsim` | `isaacsim[all,extscache]==5.1.0` | Isaac Sim runtime only (no Isaac Lab) |
+| `isaaclab` | `isaaclab==2.3.2.post1` | Isaac Lab only (assumes Isaac Sim is already present) |
+| `all` | Both Isaac Sim and Isaac Lab | Recommended for most users |
+| `stablelego` | `gurobipy==12.0.3` | Static stability analysis via Gurobi (requires a Gurobi licence) |
+
+Examples:
+
+```bash
+# Isaac Sim + Isaac Lab (most common)
+uv pip install "bricksim[all]" --index https://dl.cloudsmith.io/public/bricksim/bricksim/python/simple/
+
+# Add Gurobi stability analysis on top
+uv pip install "bricksim[all,stablelego]" --index https://dl.cloudsmith.io/public/bricksim/bricksim/python/simple/
+```
+
+## Verify Installation
+
+After installing via either path, open an empty Isaac Sim stage to confirm everything is working:
+
+```bash
+uv run bricksim
+```
+
+If Isaac Sim launches and BrickSim loads without errors in the console, the installation is complete. Close the window and move on to the [Quickstart](/quickstart) to run your first demo.
+
+## Building the C++ Extension
+
+The C++ source lives in `native/`. Any time you change files there you must recompile before the changes take effect. `pixi` manages the CMake toolchain and build presets:
+
+```bash
+# Standard release build — output copied to python/bricksim/
+pixi run build-native
+
+# Build and run the debug test suite
+pixi run test-native-debug
+
+# Build and run the release test suite
+pixi run test-native-release
+```
+
+The build system detects whether a prebuilt native cache is active (`.prebuilt-native/manifest.env`). If the manifest file is present, `build-native` will refuse to run a local build in release mode. Delete `.prebuilt-native/manifest.env` to re-enable local compilation:
+
+```bash
+rm .prebuilt-native/manifest.env
+pixi run build-native
+```
+
+## Type Checker and Editor Configuration
+
+<Note>
+  BrickSim ships a CLI command that generates type checker configuration files
+  for the full Isaac Sim dependency tree. Run it once after installation to
+  enable accurate auto-completion and static analysis in your editor:
+
+  ```bash
+  uv run bricksim-type-configs
+  ```
+
+  We recommend the [**ty** extension](https://marketplace.visualstudio.com/items?itemName=astral-sh.ty)
+  for VSCode. It handles Isaac Sim's large dependency graph significantly faster
+  than alternatives.
+</Note>

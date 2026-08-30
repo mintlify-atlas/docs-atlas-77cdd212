@@ -1,0 +1,119 @@
+---
+title: "Brick Color Lookup and Parsing"
+sidebarTitle: "Colors"
+description: "API reference for bricksim.colors — look up LEGO brick colors by name and parse color inputs into (R, G, B) tuples."
+---
+
+BrickSim ships a `colors.json` catalog of named LEGO brick colors; the `bricksim.colors` module loads this catalog at import time and exposes it as a sorted dictionary alongside a `parse_color()` helper that resolves both color names and raw hex strings into `(R, G, B)` integer tuples. Color values are used throughout BrickSim wherever a brick's visual appearance is configured — most notably in `BrickPartCfg` and `allocate_brick_part()`, which accept the tuple returned by `parse_color()` as their `color` parameter.
+
+---
+
+## `Colors`
+
+```python
+from bricksim.colors import Colors
+```
+
+A `dict[str, str]` mapping color name strings to their hex color codes (without the `#` prefix). The dictionary is populated at module import time from `colors.json`, sorted alphabetically by key, and is read-only by convention.
+
+The catalog includes the full set of official LEGO system colors. Representative names include: `"Black"`, `"Blue"`, `"Bright Green"`, `"Brown"`, `"Dark Gray"`, `"Dark Tan"`, `"Green"`, `"Lavender"`, `"Light Blue"`, `"Light Gray"`, `"Lime"`, `"Magenta"`, `"Medium Blue"`, `"Orange"`, `"Pink"`, `"Purple"`, `"Red"`, `"Tan"`, `"White"`, and `"Yellow"`, as well as transparent variants (`"Trans-Red"`, `"Trans-Clear"`, `"Trans-Dark Blue"`, …), metallic finishes (`"Metallic Gold"`, `"Metallic Silver"`, …), and chrome colors.
+
+```python
+from bricksim.colors import Colors
+
+# Inspect the full catalog
+print(f"{len(Colors)} colors available")
+print(list(Colors.keys())[:10])
+# ['Black', 'Blue', 'Bright Green', 'Bright Pink', 'Brown', ...]
+
+# Access a hex value directly
+print(Colors["Red"])    # 'c91a09'
+print(Colors["White"])  # 'ffffff'
+```
+
+---
+
+## `parse_color`
+
+```python
+def parse_color(name: str) -> tuple[int, int, int]
+```
+
+Resolves a color name or hex string into an `(R, G, B)` tuple with integer channels in the range `[0, 255]`.
+
+Two input formats are accepted:
+
+- **Named color** — any key present in `Colors` (e.g. `"Red"`, `"Dark Gray"`, `"Trans-Neon Green"`). Names are case-sensitive and must match the catalog exactly.
+- **Hex string** — a seven-character string beginning with `#` followed by exactly six hexadecimal digits in `RRGGBB` order (e.g. `"#c91a09"`).
+
+**Returns:** `tuple[int, int, int]` — an `(R, G, B)` tuple with each channel as an integer in `[0, 255]`.
+
+**Raises:** `ValueError` — if the input is neither a valid hex string nor a recognized color name.
+
+```python
+from bricksim.colors import Colors, parse_color
+
+# By name
+red = parse_color("Red")            # → (201, 26, 9)
+blue = parse_color("Blue")          # → (0, 85, 191)
+dark_gray = parse_color("Dark Gray") # → (109, 110, 92)
+
+# By hex string
+custom = parse_color("#ff8800")     # → (255, 136, 0)
+
+# List all color names
+print(list(Colors.keys())[:10])
+```
+
+<Note>
+  Color names in `Colors` and `parse_color()` are case-sensitive. `"red"` and
+  `"RED"` will both raise a `ValueError`; use `"Red"` as it appears in the
+  catalog.
+</Note>
+
+---
+
+## Using colors in brick configurations
+
+The tuple returned by `parse_color()` is passed directly as the `color` parameter to `BrickPartCfg` and `allocate_brick_part()`. Every brick in a topology can carry its own color, set via the `payload.color` field in the topology JSON before importing.
+
+```python
+from bricksim.colors import Colors, parse_color
+from bricksim.core import import_lego
+import json
+
+with open("topology.json") as f:
+    topology = json.load(f)
+
+# Set a uniform color for all parts
+for part in topology["parts"]:
+    part["payload"]["color"] = parse_color("Blue")
+
+part_paths, conn_paths = import_lego(json=topology, env_id=-1)
+```
+
+---
+
+## Randomizing colors across a set of bricks
+
+<Tip>
+  When building demonstration datasets or training environments you may want
+  to randomize brick colors to reduce visual overfitting. Use
+  `numpy.random.default_rng` for reproducible random color sampling across all
+  parts in a topology:
+
+  ```python
+  import numpy as np
+  from bricksim.colors import Colors, parse_color
+
+  rng = np.random.default_rng(seed=42)
+  color_names = list(Colors.keys())
+
+  for part in topology["parts"]:
+      part["payload"]["color"] = parse_color(rng.choice(color_names))
+  ```
+
+  Passing a fixed `seed` to `default_rng` ensures the same color assignment
+  is reproduced across runs, which is useful for debugging or generating
+  deterministic video rollouts.
+</Tip>

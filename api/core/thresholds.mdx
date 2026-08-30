@@ -1,0 +1,388 @@
+---
+title: "Assembly and Breakage Thresholds Configuration"
+sidebarTitle: "Thresholds"
+description: "Configure BrickSim's assembly detection and breakage detection thresholds using AssemblyThresholds, BreakageThresholds, and the helper functions."
+---
+
+Thresholds are **process-global settings** that govern when the physics engine creates or breaks stud-hole connections. They apply to every environment in the process simultaneously and must be configured before the simulation starts.
+
+<Note>
+  All threshold objects and setter/getter functions are process-global. There is no per-environment override mechanism — a single `AssemblyThresholds` and a single `BreakageThresholds` instance are active for the entire Isaac Sim process.
+</Note>
+
+<Warning>
+  Thresholds must be set **before** calling `world.reset()` or `env.reset()`. Changes made after the simulation has started may not take effect until the next process restart.
+</Warning>
+
+---
+
+## `AssemblyThresholds`
+
+```python
+class AssemblyThresholds:
+    def __init__(self) -> None: ...
+    def __repr__(self) -> str: ...
+
+    enabled: bool
+    distance_tolerance: float
+    max_penetration: float
+    z_angle_tolerance: float
+    required_force: float
+    yaw_tolerance: float
+    position_tolerance: float
+```
+
+Holds the geometric and force tolerances used by the native assembly detector each physics step. When all criteria are simultaneously satisfied for a stud-hole candidate, the detector creates a rigid connection.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | `bool` | `True` | Master switch — disabling this prevents any automatic connection creation |
+| `distance_tolerance` | `float` | `0.001` | Maximum stud/hole center-to-center separation in **meters** |
+| `max_penetration` | `float` | `0.005` | Maximum tolerated overlap (penetration) in **meters** before the candidate is rejected |
+| `z_angle_tolerance` | `float` | `5°` in rad | Maximum tilt angle between the stud axis and the hole axis in **radians** |
+| `required_force` | `float` | `1.0` | Minimum compressive contact force along the stud axis in **newtons** |
+| `yaw_tolerance` | `float` | `5°` in rad | Maximum residual yaw error after C4 grid snapping in **radians** |
+| `position_tolerance` | `float` | `0.002` | Maximum residual XY position error after stud-grid snapping in **meters** |
+
+### Direct configuration
+
+```python
+from bricksim.core import AssemblyThresholds, set_assembly_thresholds, get_assembly_thresholds
+
+t = AssemblyThresholds()
+t.enabled = True
+t.distance_tolerance = 0.001   # meters
+t.max_penetration = 0.005      # meters
+t.z_angle_tolerance = 0.0873   # ~5 degrees in radians
+t.required_force = 1.0         # newtons
+t.yaw_tolerance = 0.0873       # ~5 degrees in radians
+t.position_tolerance = 0.002   # meters
+set_assembly_thresholds(t)
+
+# Retrieve the currently active thresholds at any time
+current = get_assembly_thresholds()
+print(current)
+```
+
+---
+
+## `set_assembly_thresholds`
+
+```python
+def set_assembly_thresholds(thresholds: AssemblyThresholds) -> None
+```
+
+Applies an `AssemblyThresholds` instance as the process-global assembly detection configuration.
+
+<ParamField path="thresholds" type="AssemblyThresholds" required>
+  A fully configured `AssemblyThresholds` object. All fields are read at the time of this call.
+</ParamField>
+
+**Returns** `None`.
+
+---
+
+## `get_assembly_thresholds`
+
+```python
+def get_assembly_thresholds() -> AssemblyThresholds
+```
+
+Returns a copy of the currently active `AssemblyThresholds`. Mutating the returned object has no effect — call `set_assembly_thresholds` to commit changes.
+
+**Returns** `AssemblyThresholds`.
+
+---
+
+## `BreakageThresholds`
+
+```python
+class BreakageThresholds:
+    def __init__(self) -> None: ...
+    def __repr__(self) -> str: ...
+
+    enabled: bool
+    contact_regularization: float
+    clutch_axial_compliance: float
+    clutch_radial_compliance: float
+    clutch_tangential_compliance: float
+    friction_coefficient: float
+    preloaded_force: float
+    slack_fraction_warn: float
+    slack_fraction_b_floor: float
+    debug_dump: bool
+    breakage_cooldown_time: float
+```
+
+Holds the clutch-model parameters used by the native breakage detector. When an active connection's load exceeds the clutch capacity, the detector breaks it.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | `bool` | `True` | Master switch — disabling prevents automatic connection breakage |
+| `contact_regularization` | `float` | `0.1` | Regularization scalar applied to contact force estimates |
+| `clutch_axial_compliance` | `float` | `1.0` | Compliance scalar for the axial (pull-out) clutch direction |
+| `clutch_radial_compliance` | `float` | `1.0` | Compliance scalar for the radial (shear) clutch direction |
+| `clutch_tangential_compliance` | `float` | `1.0` | Compliance scalar for the tangential (torsion) clutch direction |
+| `friction_coefficient` | `float` | `0.2` | Effective friction coefficient of the clutch model |
+| `preloaded_force` | `float` | `3.5` | Nominal clutch preload in **newtons** — the reference connection strength |
+| `slack_fraction_warn` | `float` | `0.1` | Solver slack fraction above which a warning is emitted |
+| `slack_fraction_b_floor` | `float` | `1e-9` | Lower bound used in slack normalization to prevent division by zero |
+| `debug_dump` | `bool` | `False` | When `True`, the native layer emits verbose breakage diagnostics each step |
+| `breakage_cooldown_time` | `float` | `0.05` | Minimum time in **seconds** before a broken connection site can reform |
+
+---
+
+## `set_breakage_thresholds`
+
+```python
+def set_breakage_thresholds(thresholds: BreakageThresholds) -> None
+```
+
+Applies a `BreakageThresholds` instance as the process-global breakage detection configuration.
+
+<ParamField path="thresholds" type="BreakageThresholds" required>
+  A fully configured `BreakageThresholds` object.
+</ParamField>
+
+**Returns** `None`.
+
+---
+
+## `get_breakage_thresholds`
+
+```python
+def get_breakage_thresholds() -> BreakageThresholds
+```
+
+Returns a copy of the currently active `BreakageThresholds`.
+
+**Returns** `BreakageThresholds`.
+
+---
+
+## Helper functions (`bricksim.mdp.connection_thresholds`)
+
+The `bricksim.mdp.connection_thresholds` module provides convenience wrappers that construct threshold objects from keyword arguments and apply them in one call. These are the recommended entry points for most use cases.
+
+### `configure_assembly_thresholds`
+
+```python
+from bricksim.mdp.connection_thresholds import configure_assembly_thresholds
+
+def configure_assembly_thresholds(
+    enabled: bool = True,
+    distance_tolerance: float = 0.001,
+    max_penetration: float = 0.005,
+    z_angle_tolerance: float = 5.0 / 180.0 * math.pi,
+    required_force: float = 1.0,
+    yaw_tolerance: float = 5.0 / 180.0 * math.pi,
+    position_tolerance: float = 0.002,
+) -> None
+```
+
+Constructs an `AssemblyThresholds` from keyword arguments and calls `set_assembly_thresholds` in one step.
+
+<ParamField path="enabled" type="bool" default="True">
+  Whether native assembly detection is enabled.
+</ParamField>
+
+<ParamField path="distance_tolerance" type="float" default="0.001">
+  Maximum stud/hole separation in meters.
+</ParamField>
+
+<ParamField path="max_penetration" type="float" default="0.005">
+  Maximum tolerated penetration in meters.
+</ParamField>
+
+<ParamField path="z_angle_tolerance" type="float" default="5° in radians">
+  Maximum stud/hole tilt mismatch in radians. Default is `5.0 / 180.0 * math.pi`.
+</ParamField>
+
+<ParamField path="required_force" type="float" default="1.0">
+  Minimum compressive force magnitude in newtons.
+</ParamField>
+
+<ParamField path="yaw_tolerance" type="float" default="5° in radians">
+  Maximum snapped yaw error in radians. Default is `5.0 / 180.0 * math.pi`.
+</ParamField>
+
+<ParamField path="position_tolerance" type="float" default="0.002">
+  Maximum planar position error in meters.
+</ParamField>
+
+**Returns** `None`.
+
+#### Example
+
+```python
+from bricksim.mdp.connection_thresholds import configure_assembly_thresholds
+
+configure_assembly_thresholds(
+    enabled=True,
+    distance_tolerance=0.001,
+    max_penetration=0.005,
+    z_angle_tolerance=5.0 / 180.0 * 3.14159,
+    required_force=1.0,
+    yaw_tolerance=5.0 / 180.0 * 3.14159,
+    position_tolerance=0.002,
+)
+```
+
+---
+
+### `configure_breakage_thresholds`
+
+```python
+from bricksim.mdp.connection_thresholds import configure_breakage_thresholds
+
+def configure_breakage_thresholds(
+    enabled: bool = True,
+    contact_regularization: float = 0.1,
+    clutch_axial_compliance: float = 1.0,
+    clutch_radial_compliance: float = 1.0,
+    clutch_tangential_compliance: float = 1.0,
+    friction_coefficient: float = 0.2,
+    preloaded_force: float = 3.5,
+    slack_fraction_warn: float = 0.1,
+    slack_fraction_b_floor: float = 1e-9,
+    debug_dump: bool = False,
+    breakage_cooldown_time: float = 0.05,
+) -> None
+```
+
+Constructs a `BreakageThresholds` from keyword arguments and calls `set_breakage_thresholds` in one step.
+
+<ParamField path="enabled" type="bool" default="True">
+  Whether native breakage detection is enabled.
+</ParamField>
+
+<ParamField path="contact_regularization" type="float" default="0.1">
+  Contact regularization scalar.
+</ParamField>
+
+<ParamField path="clutch_axial_compliance" type="float" default="1.0">
+  Axial clutch compliance scalar.
+</ParamField>
+
+<ParamField path="clutch_radial_compliance" type="float" default="1.0">
+  Radial clutch compliance scalar.
+</ParamField>
+
+<ParamField path="clutch_tangential_compliance" type="float" default="1.0">
+  Tangential clutch compliance scalar.
+</ParamField>
+
+<ParamField path="friction_coefficient" type="float" default="0.2">
+  Effective clutch friction coefficient.
+</ParamField>
+
+<ParamField path="preloaded_force" type="float" default="3.5">
+  Nominal clutch preload in newtons.
+</ParamField>
+
+<ParamField path="slack_fraction_warn" type="float" default="0.1">
+  Warning threshold for solver slack fraction.
+</ParamField>
+
+<ParamField path="slack_fraction_b_floor" type="float" default="1e-9">
+  Lower bound used in slack normalization.
+</ParamField>
+
+<ParamField path="debug_dump" type="bool" default="False">
+  Whether to emit native breakage debug dumps each step.
+</ParamField>
+
+<ParamField path="breakage_cooldown_time" type="float" default="0.05">
+  Cooldown in seconds after a disassembly event before the same site can reassemble.
+</ParamField>
+
+**Returns** `None`.
+
+#### Example
+
+```python
+from bricksim.mdp.connection_thresholds import configure_breakage_thresholds
+
+configure_breakage_thresholds(
+    enabled=True,
+    contact_regularization=0.1,
+    clutch_axial_compliance=1.0,
+    clutch_radial_compliance=1.0,
+    clutch_tangential_compliance=1.0,
+    friction_coefficient=0.2,
+    preloaded_force=3.5,
+    breakage_cooldown_time=0.05,
+)
+```
+
+---
+
+## USD Synchronization
+
+### `set_sync_to_usd`
+
+```python
+def set_sync_to_usd(sync: bool) -> None
+```
+
+Controls whether the native extension writes connection state changes (creation and breakage events) back to the USD stage each physics step.
+
+<ParamField path="sync" type="bool" required>
+  `True` to keep the USD stage synchronized with physics connection state (default). Set `False` for headless high-throughput training to reduce overhead — the physics simulation still runs correctly but connection prims in the stage will not reflect runtime changes.
+</ParamField>
+
+**Returns** `None`.
+
+### `get_sync_to_usd`
+
+```python
+def get_sync_to_usd() -> bool
+```
+
+Returns the current USD synchronization setting.
+
+**Returns** `bool` — `True` if synchronization is enabled.
+
+---
+
+## Performance Profiling
+
+### `PhysicsStepProfiling`
+
+```python
+class PhysicsStepProfiling:
+    def __repr__(self) -> str: ...
+    sim_time: int    # Simulation time in microseconds
+    step_time: float # Wall-clock duration of the last physics step in seconds
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `sim_time` | `int` | Accumulated simulation time in microseconds |
+| `step_time` | `float` | Wall-clock duration of the last BrickSim physics callback in seconds |
+
+### `get_last_step_profiling`
+
+```python
+def get_last_step_profiling() -> PhysicsStepProfiling
+```
+
+Returns timing information for the most recently completed physics step. Useful for profiling the overhead introduced by BrickSim's assembly and breakage detectors relative to the base Isaac Sim step time.
+
+**Returns** `PhysicsStepProfiling`.
+
+#### Example
+
+```python
+from bricksim.core import get_last_step_profiling
+
+profiling = get_last_step_profiling()
+print(f"Last step took {profiling.step_time * 1000:.2f} ms at sim_time={profiling.sim_time} µs")
+```
+
+---
+
+## See Also
+
+- **[Connections](/api/core/connections)** — `get_assembly_debug_infos()` for per-candidate diagnostic output from the assembly detector.
+- **[Brick Parts](/api/core/brick-parts)** — allocating the brick prims that the assembly/breakage detectors operate on.

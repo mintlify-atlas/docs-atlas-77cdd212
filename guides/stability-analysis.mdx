@@ -1,0 +1,108 @@
+---
+title: "Static Stability Analysis with StableLego and Gurobi"
+sidebarTitle: "Stability Analysis"
+description: "Use BrickSim's StableLego integration to compute per-brick stability heatmaps via a Mixed Integer Program solver using the optional stablelego extra."
+---
+
+BrickSim includes a port of [StableLego](https://github.com/intelligent-control-lab/StableLego) — a Gurobi-based Mixed Integer Program (MIP) solver that computes force equilibrium for every brick in a LEGO structure. Given a legolization-format description of a model, the solver minimises residual force and torque across all contact interfaces and returns a 3-D voxel heatmap indicating which bricks are at risk of structural failure.
+
+## Requirements
+
+The stability analysis module depends on `gurobipy`, which is not installed by default. Install BrickSim with the `stablelego` extra to pull in the correct version:
+
+```bash
+uv pip install "bricksim[stablelego]" \
+  --index https://dl.cloudsmith.io/public/bricksim/bricksim/python/simple/ \
+  --override <(printf 'pywin32==306 ; sys_platform == "win32"\n')
+```
+
+Or add it to your `pyproject.toml` dependencies:
+
+```toml
+[project.optional-dependencies]
+stablelego = ["gurobipy==12.0.3"]
+```
+
+<Warning>
+  Gurobi requires a valid license to run. Academic licenses are available free of charge at [https://www.gurobi.com/academia/academic-program-and-licenses/](https://www.gurobi.com/academia/academic-program-and-licenses/). Without a license, `gurobipy` will raise a `GurobiError` when the solver is invoked.
+</Warning>
+
+## Running the Analysis
+
+`run_stable_lego()` accepts a legolization-format dictionary where each key is a string integer brick index and each value contains `brick_id`, `x`, `y`, `z`, and `ori` fields. The function builds and solves the MIP and returns timing and heatmap data:
+
+```python
+from bricksim.stable_lego import run_stable_lego
+from bricksim.topology.legolization import load_default_lego_library
+
+# lego_structure is a legolization-format dict
+lego_structure = {
+    "1": {"brick_id": 10, "x": 0, "y": 0, "z": 0, "ori": 0},
+    "2": {"brick_id": 10, "x": 0, "y": 0, "z": 1, "ori": 0},
+}
+
+analysis_score, num_vars, num_constr, total_t, solve_t = run_stable_lego(
+    lego_structure=lego_structure,
+    g=9.8,
+    T=100,
+    print_log=True,
+)
+print(f"Solved in {solve_t:.2f}s ({num_vars} vars, {num_constr} constraints)")
+```
+
+## Parameters
+
+| Parameter | Default | Description |
+|---|---|---|
+| `lego_structure` | required | Legolization-format dict mapping string brick indices to brick descriptors |
+| `g` | `9.8` | Gravitational acceleration in m/s² |
+| `T` | `100` | Threshold force in grams used to normalise the stability score |
+| `brick_unit_height` | `0.0096` | Height of one brick unit in metres |
+| `brick_unit_length` | `0.0078` | Stud pitch (horizontal unit length) in metres |
+| `world_dim` | `(64, 64, 64)` | Voxel grid dimensions; structures must fit within this bounding box |
+| `alpha` | `0.001` | Objective weight for the maximum downward force term |
+| `beta` | `0.000001` | Objective weight for the sum of upward forces term |
+| `brick_library` | `None` | Custom brick library dict; falls back to the bundled `lego_library.json` when `None` |
+| `print_log` | `False` | Print the Gurobi solver log and objective values to stdout |
+
+## Return Values
+
+`run_stable_lego()` returns a five-tuple:
+
+| Value | Type | Description |
+|---|---|---|
+| `analysis_score` | `numpy.ndarray` shape `(64, 64, 64)` | Per-voxel stability heatmap; values in `[0, 1]` where `0` means stable and `1` means unstable |
+| `num_vars` | `int` | Number of decision variables in the Gurobi model |
+| `num_constr` | `int` | Number of constraints in the Gurobi model |
+| `total_t` | `float` | Total wall-clock time in seconds (setup + solve) |
+| `solve_t` | `float` | Gurobi optimisation solve time in seconds |
+
+## Interpreting the Heatmap
+
+The `analysis_score` array is indexed as `analysis_score[x, y, z]`, matching the voxel coordinates used internally. A value of `0.0` at a voxel means the corresponding brick voxel is in complete static equilibrium — all net forces and torques are zero and every connection interface carries force within the threshold. Values approaching `1.0` indicate force imbalance: the brick either has a non-zero residual force or torque in at least one axis, or an interface is carrying more than the threshold force `T`, signalling structural instability.
+
+To visualise results, index the heatmap at the `(x, y, z)` coordinates of each brick's footprint and map the scalar to a colour (for example, green at `0` through red at `1`).
+
+<Tip>
+  If every voxel in the returned array is `1.0`, the structure likely has bricks that are disconnected from the rest of the assembly. Check `all_connected_with_plate` on the corresponding `BricksimDatasetItem` before running the solver.
+</Tip>
+
+## Bundled Brick Library
+
+When `brick_library=None`, `run_stable_lego()` loads the bundled `lego_library.json` via `load_default_lego_library()` from `bricksim.topology.legolization`. You can call it directly to inspect supported brick types or to extend the library with custom bricks:
+
+```python
+from bricksim.topology.legolization import load_default_lego_library
+
+library = load_default_lego_library()
+print(list(library.keys())[:5])   # e.g. ['1', '2', '3', ...]
+
+# Each entry contains physical properties
+brick = library["10"]
+print(brick["height"])    # stud height
+print(brick["width"])     # stud width
+print(brick["mass"])      # mass in kilograms
+print(brick["inventory"]) # connection point inventory
+```
+
+Each library entry has at minimum `height`, `width`, `mass`, and `inventory` fields. The `height` and `width` are measured in stud units and determine the brick's footprint on the voxel grid; `mass` is used to compute gravitational loading during the MIP solve.

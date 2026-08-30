@@ -1,0 +1,244 @@
+---
+title: "BrickSim CLI Commands Reference"
+sidebarTitle: "CLI"
+description: "Reference for all BrickSim CLI entry points — bricksim, bricksim-assemble-brick-expert, bricksim-convert-topology, and bricksim-type-configs."
+---
+
+BrickSim installs four CLI entry points via the `bricksim` Python package. All commands are available after activating the uv environment, or can be invoked directly through `uv run` without activation. The entry points are registered in `pyproject.toml` and delegate to their respective Python modules at startup.
+
+---
+
+## `bricksim`
+
+**Entry point:** `bricksim.__main__:main`
+
+Opens an empty Isaac Sim stage with the BrickSim extension loaded. When called without arguments it launches an interactive session you can use to explore the simulator. When a script path is supplied as the first positional argument, the script runs inside the fully-initialized BrickSim/Isaac Sim environment — all BrickSim APIs, USD stage access, and physics simulation are available from within the script.
+
+```bash
+# Open interactive empty stage
+uv run bricksim
+
+# Run a script inside the BrickSim Isaac Sim environment
+uv run bricksim demos/demo_assembly.py
+```
+
+---
+
+## `bricksim-assemble-brick-expert`
+
+**Entry point:** `bricksim.cli.assemble_brick_expert:main`
+
+Runs a deterministic expert policy for the `AssembleBrick` task — a manipulation environment where a robot arm must pick up a loose brick and place it onto a target stud on an existing assembly. The command launches an Isaac Lab `ManagerBasedRLEnv`, steps the expert through episodes, and optionally streams or saves camera observations.
+
+<Note>
+  Isaac Lab's `AppLauncher` arguments (e.g. `--headless`, `--enable_cameras`,
+  `--device`) are also accepted and are forwarded directly to the Isaac Sim
+  application launcher. Pass `--help` to see the full combined argument list.
+</Note>
+
+### Arguments
+
+<ParamField path="--num_envs" type="int" default="1">
+  Number of parallel simulation environments to instantiate. Higher values
+  improve throughput on multi-GPU machines.
+</ParamField>
+
+<ParamField path="--seed" type="int">
+  Optional integer seed for the environment's random-number generator. When
+  omitted the environment uses its default seeding strategy.
+</ParamField>
+
+<ParamField path="--goals" type="string">
+  Semicolon-separated assembly goal specifications, each formatted as
+  `x,y,yaw`. Each triplet defines a target stud offset in studs and a yaw
+  rotation in increments of 90 °. When omitted, the environment samples all
+  valid goals from its configuration.
+
+  **Example:** `--goals "0,0,0;1,0,1"` specifies two goals — one at the
+  origin with no rotation and one offset by one stud with a 90 ° yaw.
+</ParamField>
+
+<ParamField path="--obs-mode" type="string" default="state">
+  Observation mode. One of:
+  - `state` — proprioceptive state observations only; no cameras rendered.
+  - `rgb` — state plus an RGB camera observation group.
+  - `rgbd` — state plus an RGB-D camera observation group (RGB images and
+    float32 depth maps in metres).
+
+  Using `rgb` or `rgbd` automatically enables Isaac Sim camera rendering
+  (`--enable_cameras`).
+</ParamField>
+
+<ParamField path="--save-camera-dir" type="path">
+  Output directory where camera frames are written. The directory is created
+  automatically if it does not exist. RGB images are saved as `.png` files;
+  depth maps and other float arrays are saved as compressed `.npz` files with
+  key `image`. Has no effect when `--obs-mode state` is active.
+</ParamField>
+
+<ParamField path="--save-camera-every" type="int" default="30">
+  Interval in environment steps between saved camera frames. Must be a
+  positive integer. For example, `--save-camera-every 5` saves one frame every
+  five steps.
+</ParamField>
+
+<ParamField path="--show-camera" type="flag">
+  Display camera observations live in an OpenCV window during rollout. Has no
+  effect when `--obs-mode state` is active.
+</ParamField>
+
+<ParamField path="--show-goals" type="flag">
+  Enable the assembly-goal debug visualizer, which renders markers in the
+  Isaac Sim viewport indicating the target stud position for each environment.
+</ParamField>
+
+### Usage examples
+
+```bash
+# State-based rollout with 4 parallel environments
+bricksim-assemble-brick-expert --num_envs 4
+
+# Collect RGB-D data, saving one frame every 5 steps
+bricksim-assemble-brick-expert --obs-mode rgbd \
+  --save-camera-dir ./rollout_images \
+  --save-camera-every 5
+
+# Run a specific assembly goal in headless mode
+bricksim-assemble-brick-expert --goals "0,0,0" --headless
+
+# Show camera feed and goal markers during interactive rollout
+bricksim-assemble-brick-expert --obs-mode rgb --show-camera --show-goals
+```
+
+---
+
+## `bricksim-convert-topology`
+
+**Entry point:** `bricksim.cli.convert_topology:main`
+
+Converts third-party LEGO structure representations into BrickSim's internal topology JSON format. Two source formats are supported: the **legolization** JSON format (from the [Legolization](https://github.com/adorjanszeles/legolization) pipeline) and the **StableText2Brick** text format (from the [StableText2Brick](https://github.com/LEGO-Bricks/StableText2Brick) model). The output topology JSON encodes the brick parts list, stud–antistud connectivity graph, and pose hints consumed by `import_lego()`.
+
+Format detection is automatic by default — the tool inspects the input file and selects the correct parser. Pass `--format` to override when auto-detection is ambiguous.
+
+### Arguments
+
+<ParamField path="--input" type="path" required>
+  Path to the input file. Accepts a legolization `.json` file or a
+  StableText2Brick bricks text file.
+</ParamField>
+
+<ParamField path="--output" type="path" required>
+  Path where the converted topology `.json` file is written. The file is
+  created or overwritten.
+</ParamField>
+
+<ParamField path="--format" type="string" default="auto">
+  Input format selector. One of:
+  - `auto` — detect the format automatically (default).
+  - `legolization` — parse as a legolization JSON structure.
+  - `stabletext2brick` — parse as a StableText2Brick bricks text file.
+</ParamField>
+
+<ParamField path="--baseplate" type="string">
+  Optional baseplate dimensions to inject into the topology, formatted as
+  `WxH` (e.g. `16x16` or `32x32`). When provided, a flat baseplate part is
+  added to the structure and connectivity is updated accordingly. When omitted,
+  no baseplate is included.
+</ParamField>
+
+### Output
+
+The command prints a summary to stdout on success:
+
+```
+Detected input format: legolization
+16 parts.
+14 connections.
+3 pose hints.
+Writing topology JSON to output.json
+```
+
+### Usage examples
+
+```bash
+# Auto-detect format and convert with no baseplate
+bricksim-convert-topology --input structure.json --output topology.json
+
+# Force legolization format and add a 16×16 baseplate
+bricksim-convert-topology \
+  --input legolization_output.json \
+  --output topology.json \
+  --format legolization \
+  --baseplate 16x16
+
+# Convert a StableText2Brick file with a 32×32 baseplate
+bricksim-convert-topology \
+  --input bricks.txt \
+  --output topology.json \
+  --format stabletext2brick \
+  --baseplate 32x32
+```
+
+---
+
+## `bricksim-type-configs`
+
+**Entry point:** `bricksim.cli.type_configs:main`
+
+Generates `ty.toml` type-checker configuration and a `.ty/extension-packages/` overlay directory for the current project. Isaac Sim ships hundreds of Python extension modules via its Kit extension system; these are not on the standard Python path and have no published stubs, which prevents static-analysis tools from resolving imports like `import isaacsim.core.api`. This command introspects the active Python environment, locates all Isaac Sim and Isaac Lab source packages, builds a symlinked overlay that mirrors their module trees, and writes a `ty.toml` that adds those paths to `[environment].extra-paths`.
+
+The generated `ty.toml` merges any stable settings from an optional `ty.base.toml` in the project root. Only `ty.toml` and `.ty/extension-packages/` are overwritten — all other project files are left untouched.
+
+### Arguments
+
+<ParamField path="-y" type="flag">
+  Apply changes without interactive confirmation. Use this flag in CI or
+  scripted environments where stdin is not a terminal.
+</ParamField>
+
+<ParamField path="--root" type="path" default=".">
+  Target project root where `ty.toml` and `.ty/extension-packages/` are
+  written. Defaults to the current working directory.
+</ParamField>
+
+<ParamField path="--ty-base-config" type="path">
+  Path to a base `ty` configuration file whose settings are merged into the
+  generated `ty.toml`. Defaults to `ty.base.toml` under `--root`. When the
+  file does not exist the generated config contains only the auto-detected
+  paths.
+</ParamField>
+
+### What gets generated
+
+| Path | Description |
+|---|---|
+| `ty.toml` | Generated `ty` configuration with all Isaac Sim and Isaac Lab paths injected into `[environment].extra-paths`. |
+| `.ty/extension-packages/` | Symlinked overlay of `isaacsim.*` extension modules discovered from the Kit extension cache. |
+
+### Usage
+
+```bash
+# Interactive: preview targets, then confirm
+uv run bricksim-type-configs
+
+# Non-interactive: apply immediately (for CI / scripts)
+uv run bricksim-type-configs -y
+
+# Write config into a specific project directory
+uv run bricksim-type-configs --root /path/to/my/project -y
+```
+
+<Note>
+  Install the [ty VSCode extension](https://marketplace.visualstudio.com/items?itemName=astral-sh.ty)
+  to get editor-integrated auto-completion and type diagnostics for Isaac Sim
+  imports. After running `bricksim-type-configs`, VSCode will pick up the
+  generated `ty.toml` automatically and resolve all `isaacsim.*` and
+  `isaaclab.*` symbols without any additional configuration.
+</Note>
+
+<Warning>
+  Re-run `bricksim-type-configs` whenever you update Isaac Sim or Isaac Lab, or
+  after changing the `--root` project. The `.ty/extension-packages/` overlay
+  uses symlinks into the installed extension cache, so the generated paths
+  become stale if the cache location changes.
+</Warning>

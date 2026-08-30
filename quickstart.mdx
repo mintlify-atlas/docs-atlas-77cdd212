@@ -1,47 +1,98 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with BrickSim in 5 Minutes"
+sidebarTitle: "Quickstart"
+description: "Install BrickSim, run your first assembly demo, and observe automatic stud-hole connection detection in a live Isaac Sim simulation."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
-
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+This guide walks you through everything needed to go from zero to a running BrickSim simulation: installing the prerequisites, pulling the `bricksim` Python package from the nightly registry, launching an interactive Isaac Sim stage, and then running the assembly demo to watch a Franka robot pick and place LEGO bricks with automatic stud-hole connection detection firing in real time.
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+
+  <Step title="Install Prerequisites">
+    BrickSim requires an x86-64 Linux machine with an NVIDIA GPU and two command-line tools.
+
+    **Install the NVIDIA driver**
+
+    Follow the [Isaac Sim system requirements](https://docs.isaacsim.omniverse.nvidia.com/5.1.0/installation/requirements.html#system-requirements) to verify your driver version is compatible with Isaac Sim 5.1.
+
+    **Install uv**
+
+    BrickSim uses [`uv`](https://docs.astral.sh/uv/getting-started/installation/) for all Python environment and package management. Install it with:
 
     ```bash
-    npm install your-package
+    curl -LsSf https://astral.sh/uv/install.sh | sh
     ```
-  </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+
+    Confirm the installation succeeded:
 
     ```bash
-    your-cli init
+    uv --version
     ```
   </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+
+  <Step title="Install BrickSim">
+    Install the `bricksim` package from the [nightly build registry](https://broadcasts.cloudsmith.com/bricksim/bricksim) hosted on Cloudsmith. The `[all]` extra pulls in both Isaac Sim and Isaac Lab:
 
     ```bash
-    your-cli start
+    uv pip install "bricksim[all]" \
+      --index https://dl.cloudsmith.io/public/bricksim/bricksim/python/simple/ \
+      --override <(printf 'pywin32==306 ; sys_platform == "win32"\n')
     ```
+
+    The `--override` flag works around an unconditional `pywin32` dependency that Isaac Sim declares but is not needed on Linux.
+
+    <Note>
+      The prebuilt C++ native extension (a compiled `.so` shared library) is
+      downloaded automatically as part of the package on first install. You do
+      not need to compile anything unless you want to modify the native code.
+    </Note>
   </Step>
+
+  <Step title="Open an Empty Interactive Stage">
+    Verify the installation and explore Isaac Sim interactively by launching BrickSim without a script argument:
+
+    ```bash
+    uv run bricksim
+    ```
+
+    This opens the full Isaac Sim GUI with BrickSim loaded as an extension and an empty stage ready for interactive use. Close the window to exit.
+  </Step>
+
+  <Step title="Run the Assembly Demo">
+    Run the bundled assembly demo to see BrickSim's core feature — automatic stud-hole connection detection — in action:
+
+    ```bash
+    uv run bricksim demos/demo_assembly.py
+    ```
+
+    The demo loads a brick structure from `demos/demo_assembly_structure1.json`, spawns a Franka Emika robot arm in the scene, and drives the robot through a pick-and-place sequence. When the robot presses a brick down onto a target structure with sufficient force and correct alignment, BrickSim's physics contact detection automatically creates a rigid stud-hole joint — no scripted snapping, purely from the physics state.
+  </Step>
+
+  <Step title="Try Other Demos">
+    BrickSim includes additional demos that cover different interaction modalities:
+
+    | Demo | Command | Description |
+    |---|---|---|
+    | In-hand manipulation | `uv run bricksim demos/demo_inhand.py` | Experiments with manipulating bricks while grasped |
+    | Keyboard teleoperation | `uv run bricksim demos/demo_keyboard_teleop.py` | Drive the robot end-effector with keyboard input |
+    | Teleoperation & replay | `uv run bricksim demos/demo_teleop.py` | Record and replay teleoperation sessions; requires the `lerobot` package and a configured leader device |
+  </Step>
+
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+## Configuring Assembly Thresholds
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
-</Tip>
+After installation you can tune when BrickSim considers a stud-hole pair "assembled" by adjusting the `AssemblyThresholds` object. The relevant parameters control geometric tolerances and the minimum force required for a connection to snap:
+
+```python
+from bricksim.core import AssemblyThresholds, set_assembly_thresholds
+
+thresholds = AssemblyThresholds()
+thresholds.distance_tolerance = 0.001   # Maximum centre-to-centre distance (metres)
+thresholds.required_force = 1.0         # Minimum contact force to trigger assembly (Newtons)
+set_assembly_thresholds(thresholds)
+```
+
+You can read back the current thresholds at any time with `get_assembly_thresholds()`, and inspect the per-contact debug information with `get_assembly_debug_infos()` to understand exactly why a candidate connection was accepted or rejected each physics step.
+
+For a complete walk-through of building the native extension from source or installing into an existing `pyproject.toml`-managed project, see the [Installation guide](/installation).
